@@ -1,0 +1,11 @@
+# 本机目录：留空表示脚本所在目录
+LOCAL_DIR=
+
+# 编译服务器
+SERVER_HOST=192.168.1.7
+SERVER_USER=wang
+# 相对于远端登录用户主目录
+REMOTE_DIR=projects/bes-wavetable/out/firmware/latest
+
+# 烧录串口号：设备管理器里是 COM6 就写 6，COM3 就写 3
+COM=6

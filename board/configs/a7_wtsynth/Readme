@@ -1,0 +1,52 @@
+AX4D wavetable sound demo (SDK AP + A7)
+========================================
+
+可改 AP 的完整 SDK 双镜像工程：A7 通过 RPMSG `/dev/audio/pcm0p` 发声。
+
+Configs
+-------
+
+- `ap_wtsynth` — AP（`CONFIG_AUDIO_RPMSG_SERVER`），prompt `apwt>`
+- `a7_wtsynth` — A7（`CONFIG_AUDIO_RPMSG_CLIENT` + `CONFIG_WAVETABLE_SYNTH`），prompt `a7wt>`
+- `# CONFIG_BES_A7_PRODUCT_AP is not set`（不要走密封产品 AP 捷径）
+
+产品密封 AP 实验仍用 `configs/wavetable` + `tools/flash_a7.sh`。
+
+Build
+-----
+
+```bash
+./build.sh boards/best2003_ep/aos_evb_ax4d/configs/bootloader -j && \
+./build.sh boards/best2003_ep/aos_evb_ax4d/configs/ota -j && \
+./build.sh boards/best2003_ep/aos_evb_ax4d/configs/a7_wtsynth -j && \
+./build.sh boards/best2003_ep/aos_evb_ax4d/configs/ap_wtsynth -j
+```
+
+Flash
+-----
+
+```bash
+./tools/flash_wtsynth.sh --hw-reset both
+```
+
+或手动（与板级 Readme 相同布局）：
+
+```text
+nuttx_bl.bin
+nuttx_ota.bin @ 0x2C040000 与 0x2C0C0000
+nuttx_a7.bin  @ 0x2C850000
+nuttx_ap.bin
+```
+
+Run
+---
+
+上电后 A7 `CONFIG_WAVETABLE_SYNTH_AUTOSTART` 会自动播 600 Hz / 8s。
+
+手动：
+
+```text
+apwt> rptun start /dev/rptun/audio
+apwt> cu -l /dev/ttyAUDIO
+a7wt> wtsynth -f 600 -t 3000 -v 800
+```

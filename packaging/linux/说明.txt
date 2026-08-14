@@ -1,0 +1,32 @@
+BES2600 固件包（2026-08-13 全量编译）
+
+一、里面有什么
+  nuttx_bl.bin     启动引导
+  nuttx_ota.bin    恢复分区（烧两份）
+  nuttx_a7.bin     A7 音频核
+  nuttx_ap.bin     应用核（含 I2S 输出，必须烧）
+  nuttx_apc1.bin   连接核（官方这条板子默认不烧，先不用）
+  programmer2003.bin  烧录器程序
+  dldtool.exe      Windows 烧录工具
+  dldtool          Linux 烧录工具
+
+二、拉到你电脑
+  服务器：wang@192.168.1.7
+  目录（相对于登录用户主目录）：projects/bes-wavetable/out/firmware/latest
+
+  Windows PowerShell：
+    scp -r wang@192.168.1.7:projects/bes-wavetable/out/firmware/latest .
+    解压后双击 烧录-Windows.bat
+
+  或用 Cursor 左侧文件树，把 firmware_release 文件夹下载下来。
+
+三、烧录前
+  1. USB 接到板子的「下载串口」（不是日志口）
+  2. 设备管理器里看 COM 号，例如 COM6，就把脚本里的 6 改成你的号
+  3. 板子上电，必要时按一下复位
+
+四、I2S 脚（烧完用来量）
+  IO20 / P2_0 = MCLK
+  IO21 / P2_1 = DOUT
+  IO22 / P2_2 = LRCK
+  IO23 / P2_3 = BCLK

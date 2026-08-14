@@ -1,0 +1,24 @@
+AX4D A7 wavetable synthesizer (size-trimmed)
+============================================
+
+Runs on Cortex-A7 (`BES2003_AUDIO`). Loads single-cycle wavetables from TF
+card and plays through `/dev/audio/pcm0p` (RPMSG client to AP audio server).
+
+Build
+-----
+
+```bash
+./build.sh boards/best2003_ep/aos_evb_ax4d/configs/wavetable -j64
+
+# AP is still required for the codec and audio server.
+./build.sh boards/best2003_ep/aos_evb_ax4d/configs/bootloader -j64
+./build.sh boards/best2003_ep/aos_evb_ax4d/configs/ota -j64
+./build.sh boards/best2003_ep/aos_evb_ax4d/configs/ap -j64
+```
+
+Put raw single-cycle tables under `/sdcard/wavetable/`.
+
+```text
+wtsynth
+wtsynth -w /sdcard/wavetable/saw.raw -n 64 -t 3000
+```

@@ -1,0 +1,7 @@
+# Vendor SDK base commits these patches apply on top of.
+# branch: bes-release/1.0
+
+root repo         HEAD=9c3b4ae049d8e6ad16ff588e95293dcf84e11e00
+                  9c3b4ae0 2026-08-06 21:03:48 +0800 v1.0.12
+framework/services HEAD=0943b2186ba046eae8831336825325f543237834
+                  0943b2186 2026-08-06 20:26:17 +0800 v1.0.12 fix build

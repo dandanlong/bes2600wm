@@ -1,0 +1,17 @@
+﻿Windows local folder: the directory containing these scripts
+
+FIRST TIME - open PowerShell on your Windows PC, paste this one line:
+
+scp wang@192.168.1.7:projects/bes-wavetable/packaging/windows_flash/first_install.ps1 .; powershell -NoProfile -ExecutionPolicy Bypass -File .\first_install.ps1
+
+It will:
+  1) use the directory containing first_install.ps1
+  2) download scripts + dldtool.exe + programmer2003.bin + nuttx_*.bin
+
+DAILY:
+  1) After server build finishes, double-click 下载固件.bat (or download.bat)
+  2) Device Manager: check COM number, edit config.txt COM=
+  3) USB to download UART, double-click 烧录.bat (or flash.bat)
+
+Need OpenSSH Client on Windows (Settings -> Apps -> Optional features).
+Need network to 192.168.1.7.

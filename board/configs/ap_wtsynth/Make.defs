@@ -1,0 +1,5 @@
+############################################################################
+# AX4D AP for wavetable demo (pairs with a7_wtsynth)
+############################################################################
+
+include $(TOPDIR)/../vendor/bes/boards/best2003_ep/aos_evb_ax4d/configs/ap/Make.defs
