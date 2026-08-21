@@ -31,7 +31,8 @@
 #define PCM_SAMP_ALL_OFF_MS       12
 #define PCM_SAMP_TAIL_DETACH_MS   8
 #define PCM_SAMP_STEAL_QUIET      4000 /* env level: hard-replace OK */
-#define PCM_SAMP_CTRL_PERIOD      8
+/* Control-rate for LFO, filter/pitch coeffs (audio-rate IIR still per-sample). */
+#define PCM_SAMP_CTRL_PERIOD      32
 #define PCM_SAMP_ENV_SEGS         4
 #define PCM_SAMP_REQ_COUNT        256
 /* Attack head size = one stream half (8 KiB / 4096 frames ≈ 93 ms @ 44.1 kHz). */

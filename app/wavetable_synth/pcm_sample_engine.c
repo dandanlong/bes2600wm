@@ -1389,6 +1389,25 @@ static bool env_tick(struct pcm_samp_env_s *env, uint32_t hz)
   return true;
 }
 
+/* Same as env_tick, but apply n sample-periods (for control-rate ENV2/3). */
+static bool env_tick_n(struct pcm_samp_env_s *env, uint32_t hz, unsigned n)
+{
+  if (n <= 1u)
+    {
+      return env_tick(env, hz);
+    }
+  if (env->phase == PCM_ENV_IDLE)
+    {
+      return false;
+    }
+  if (env->phase == PCM_ENV_SUSTAIN)
+    {
+      return true;
+    }
+  env->level += env->inc * (int32_t)(n - 1u);
+  return env_tick(env, hz);
+}
+
 /* Force amp to 0 over ms (also accelerates an in-progress release). */
 static void env_force_fade_ms(struct pcm_samp_env_s *env, uint32_t hz,
                               uint32_t ms)
@@ -1557,22 +1576,41 @@ static void lfo_load(struct pcm_samp_lfo_s *lfo,
   lfo->attack_len = ((uint32_t)desc->attack_ms * hz) / 1000u;
 }
 
-static void lfo_tick(struct pcm_samp_lfo_s *lfo)
+/* Advance LFO by n sample periods so control-rate ticks keep musical rate. */
+static void lfo_tick_n(struct pcm_samp_lfo_s *lfo, unsigned n)
 {
   int32_t val;
-  if (lfo->delay_left)
+  if (n == 0)
     {
-      lfo->delay_left--;
-      lfo->value = 0;
       return;
     }
-  lfo->phase += lfo->phase_inc;
+  if (lfo->delay_left)
+    {
+      if (lfo->delay_left > n)
+        {
+          lfo->delay_left -= n;
+          lfo->value = 0;
+          return;
+        }
+      n -= lfo->delay_left;
+      lfo->delay_left = 0;
+      if (n == 0)
+        {
+          lfo->value = 0;
+          return;
+        }
+    }
+  lfo->phase += (uint32_t)((uint64_t)lfo->phase_inc * n);
   val = lfo_wave(lfo->waveform, lfo->phase);
   if (lfo->attack_len && lfo->attack_pos < lfo->attack_len)
     {
-      val = (val * (int32_t)((lfo->attack_pos * 32767u) /
-                              lfo->attack_len)) >> 15;
-      lfo->attack_pos++;
+      uint32_t pos = lfo->attack_pos + n;
+      if (pos > lfo->attack_len)
+        {
+          pos = lfo->attack_len;
+        }
+      lfo->attack_pos = pos;
+      val = (val * (int32_t)((pos * 32767u) / lfo->attack_len)) >> 15;
     }
   lfo->value = val;
 }
@@ -4518,22 +4556,26 @@ static void mix_voices_range(struct pcm_samp_engine_s *eng, int32_t *mixbuf,
 
             if (!fast)
               {
-                if (v->mod_flags & MOD_FILTER)
-                  {
-                    env_tick(&v->env2, eng->out_rate);
-                  }
-                if (v->mod_flags & MOD_PITCH)
-                  {
-                    env_tick(&v->env3, eng->out_rate);
-                    lfo_tick(&v->lfo1);
-                  }
-                if (v->mod_flags & (MOD_FILTER | MOD_AMP_LFO))
-                  {
-                    lfo_tick(&v->lfo2);
-                  }
+                /* LFO + filter/pitch coeffs at control rate; IIR stays
+                 * audio-rate below. */
                 if (v->mod_flags && ++v->ctrl_div >= PCM_SAMP_CTRL_PERIOD)
                   {
                     v->ctrl_div = 0;
+                    if (v->mod_flags & MOD_FILTER)
+                      {
+                        env_tick_n(&v->env2, eng->out_rate,
+                                   PCM_SAMP_CTRL_PERIOD);
+                      }
+                    if (v->mod_flags & MOD_PITCH)
+                      {
+                        env_tick_n(&v->env3, eng->out_rate,
+                                   PCM_SAMP_CTRL_PERIOD);
+                        lfo_tick_n(&v->lfo1, PCM_SAMP_CTRL_PERIOD);
+                      }
+                    if (v->mod_flags & (MOD_FILTER | MOD_AMP_LFO))
+                      {
+                        lfo_tick_n(&v->lfo2, PCM_SAMP_CTRL_PERIOD);
+                      }
                     voice_apply_rate(eng, v);
                     filter_update(&v->filter, v->env2.level, v->lfo2.value);
                   }
