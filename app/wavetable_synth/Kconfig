@@ -1,0 +1,56 @@
+#
+# For a description of the syntax of this configuration file,
+# see the file kconfig-language.txt in the NuttX tools repository.
+#
+
+config WAVETABLE_SYNTH
+	tristate "Wavetable synthesizer (A7)"
+	default n
+	depends on AUDIO
+	select AUDIOUTILS_NXAUDIO_LIB
+	---help---
+		Wavetable synthesizer running on A7. Loads single-cycle
+		tables from TF card (/sdcard) and plays via /dev/audio/pcm0p
+		(RPMSG to AP audio server).
+
+if WAVETABLE_SYNTH
+
+config WAVETABLE_SYNTH_PROGNAME
+	string "Program name"
+	default "wtsynth"
+
+config WAVETABLE_SYNTH_PRIORITY
+	int "Wavetable synth task priority"
+	default 100
+
+config WAVETABLE_SYNTH_STACKSIZE
+	int "Wavetable synth stack size"
+	default 8192
+
+config WAVETABLE_SYNTH_AUTOSTART
+	bool "Autostart wtsynth after boot"
+	default n
+	---help---
+		Launch a short demo note from rc.sysinit.audio.
+
+endif
+
+
+config USB_MIDI_BRIDGE
+	tristate "USB MIDI to A7 bridge (AP)"
+	default n
+	depends on BES_HAVE_USB && RPTUN
+	---help---
+		Expose a class-compliant USB MIDI device and forward events to A7.
+
+if USB_MIDI_BRIDGE
+config USB_MIDI_BRIDGE_PROGNAME
+	string "Program name"
+	default "usbmidid"
+config USB_MIDI_BRIDGE_PRIORITY
+	int "Task priority"
+	default 100
+config USB_MIDI_BRIDGE_STACKSIZE
+	int "Task stack size"
+	default 6144
+endif

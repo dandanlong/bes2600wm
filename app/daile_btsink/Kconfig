@@ -1,0 +1,19 @@
+config DAILE_BTSINK
+	tristate "DAILE BT A2DP sink boot helper (AP)"
+	default n
+	depends on BLUETOOTH && BLUETOOTH_A2DP_SINK
+	---help---
+		Enable Bluetooth adapter at boot, set name DAILE, become
+		discoverable for phone A2DP streaming into mediad.
+
+if DAILE_BTSINK
+config DAILE_BTSINK_PROGNAME
+	string "Program name"
+	default "daile_btsink"
+config DAILE_BTSINK_PRIORITY
+	int "Task priority"
+	default 100
+config DAILE_BTSINK_STACKSIZE
+	int "Task stack size"
+	default 8192
+endif

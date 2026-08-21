@@ -1,0 +1,2018 @@
+diff --git a/boards/best2003_ep/aos_evb_ax4d/Kconfig b/boards/best2003_ep/aos_evb_ax4d/Kconfig
+index 38507a5c..22209472 100644
+--- a/boards/best2003_ep/aos_evb_ax4d/Kconfig
++++ b/boards/best2003_ep/aos_evb_ax4d/Kconfig
+@@ -43,6 +43,14 @@ config BES2003_AP
+ 	select BES_CORE_AP
+ 	bool "bes2003 AP"
+ 
++config BES_AX4D_WTSYNTH
++	bool "AX4D wavetable sound demo (lean AP rcS)"
++	default n
++	depends on BES2003_AP
++	---help---
++		Use rcS.ap_wtsynth: start RPMSG audio without blocking
++		rpmsgfs mounts. Pair with configs/a7_wtsynth.
++
+ config BES2003_CP
+ 	select BES_CORE_CP
+ 	select DVFS_DUMMY_SET
+@@ -90,11 +98,11 @@ config BES_RPTUN_AP2CP
+     default n
+ 
+ if BES_RPTUN_AP2CP_MASTER
+-config APC1_BIN_SIZE
++config APC1_SUBSYS_BIN_SIZE
+     hex "APC1 SUBSYS BIN SIZE"
+     default 0x100000
+ 
+-config APC1_BIN_ADDRESS
++config APC1_SUBSYS_BIN_ADDRESS
+     hex "APC1 SUBSYS BIN ADDRESS"
+     default 0x28B00000
+ endif
+@@ -105,7 +113,7 @@ config BES_APC1_BIN_FLASH_BOOT
+     depends on BES2003_CP
+ 
+ if BES_APC1_BIN_FLASH_BOOT
+-config APC1_BIN_FLASH_OFFSET
++config BES_APC1_BIN_FLASH_OFFSET
+     hex "Set apc1 boot offset in flash"
+     default 0
+ endif
+diff --git a/boards/best2003_ep/aos_evb_ax4d/board_cfg.mk b/boards/best2003_ep/aos_evb_ax4d/board_cfg.mk
+index c38bd199..eadcc919 100644
+--- a/boards/best2003_ep/aos_evb_ax4d/board_cfg.mk
++++ b/boards/best2003_ep/aos_evb_ax4d/board_cfg.mk
+@@ -44,6 +44,8 @@ export UTILS_ESHELL_BTRF_TEST := 1
+ export USB_HIGH_SPEED := 0
+ 
+ #SHARED mem layout
++# Keep RPTUNMEM on PSRAMUHS for A7 boot/linker stability. Product AP's live
++# AP↔A7 RSC is in DSP_RAM @ 0x50062400 — up_rptun.c overrides the base.
+ export CONFIG_RPTUNMEM_ON_PSRAMUHS := y
+ export CONFIG_PSRAMUHS_TOTAL_SIZE := 0x800000
+ export CONFIG_BES_UNCACHE_HEAP_SIZE := 0x40000
+@@ -76,5 +78,17 @@ ifeq ($(CONFIG_DSP_IMAGE_COMP),y)
+ CFLAGS += -DCONFIG_DSP_IMAGE_COMP
+ endif
+ ifeq ($(CONFIG_DSP_USE_PSRAM),y)
+-CFLAGS += -DCONFIG_DSP_USE_PSRAM
++CFLAGS += -DCONFIG_DSP_USE_PSRAM -DDSP_USE_PSRAM
+ endif
++
++# DAILE: DAC keep + I2S1 mirror on IO20/21/22/23
++# Enable audioflinger I2S + AUDMA I2S1_TX mapping (hal_dmacfg needs -DAF_DEVICE_I2S).
++export AF_DEVICE_I2S := 1
++KBUILD_CPPFLAGS += -DAF_DEVICE_I2S
++export I2S1_O_IOMUX_INDEX := 21
++KBUILD_CPPFLAGS += -DI2S1_O_IOMUX_INDEX=21
++export I2S_MCLK_IOMUX_INDEX := 20
++KBUILD_CPPFLAGS += -DI2S_MCLK_IOMUX_INDEX=20
++CFLAGS += -DCONFIG_DAILE_DAC_I2S_MIRROR
++# DAILE: classic TRANSQ / mcu_audio playback @ 44.1 kHz mono
++CFLAGS += -DMIC_SAMPLERATE=44100
+diff --git a/boards/best2003_ep/aos_evb_ax4d/configs/ap/defconfig b/boards/best2003_ep/aos_evb_ax4d/configs/ap/defconfig
+index 773b1837..89df0aeb 100644
+--- a/boards/best2003_ep/aos_evb_ax4d/configs/ap/defconfig
++++ b/boards/best2003_ep/aos_evb_ax4d/configs/ap/defconfig
+@@ -402,7 +402,6 @@ CONFIG_SMF_CONSOLE=y
+ CONFIG_SMF_CONSOLE_MM_CORE="m33_ap"
+ CONFIG_SMF_CONSOLE_MM_PLATFORM="m33"
+ CONFIG_SMF_CONSOLE_MM_PROJECT="nuttx_2003_sc"
+-CONFIG_SMF_URL_MAX_LEN=512
+ CONFIG_SPI=y
+ CONFIG_SPITOOL_DEFFREQ=3000000
+ CONFIG_STACK_CANARIES=y
+diff --git a/boards/best2003_ep/aos_evb_ax4d/configs/apc1/defconfig b/boards/best2003_ep/aos_evb_ax4d/configs/apc1/defconfig
+index 8aab25e7..900cae2a 100644
+--- a/boards/best2003_ep/aos_evb_ax4d/configs/apc1/defconfig
++++ b/boards/best2003_ep/aos_evb_ax4d/configs/apc1/defconfig
+@@ -44,7 +44,6 @@ CONFIG_ARMV8M_USEBASEPRI=y
+ CONFIG_ARM_MPU=y
+ CONFIG_BES2003_CP=y
+ CONFIG_BES_APC1_BIN_FLASH_BOOT=y
+-CONFIG_APC1_BIN_FLASH_OFFSET=0xB00000
+ CONFIG_BES_BOARD_START_FILE_CM=y
+ CONFIG_BES_CORE_APC1=y
+ CONFIG_BES_ONESHOT_SYSTICK=y
+diff --git a/boards/best2003_ep/aos_evb_ax4d/configs/bootloader/defconfig b/boards/best2003_ep/aos_evb_ax4d/configs/bootloader/defconfig
+index 94d13fd8..4f1943bb 100755
+--- a/boards/best2003_ep/aos_evb_ax4d/configs/bootloader/defconfig
++++ b/boards/best2003_ep/aos_evb_ax4d/configs/bootloader/defconfig
+@@ -7,14 +7,13 @@
+ #
+ # CONFIG_BES_HAVE_SPI is not set
+ # CONFIG_BES_RPTUN_DELAY_BOOT is not set
+-# CONFIG_SYSLOG_CRLF is not set
+-# CONFIG_BES_SECURE_BOOT is not set
+ # CONFIG_DEV_CONSOLE is not set
+ # CONFIG_FIX_PIXCLK_DIV is not set
+ # CONFIG_JTAG_ENABLE is not set
+ # CONFIG_NSH_ARGCAT is not set
+ # CONFIG_NSH_DISABLE_PS is not set
+ # CONFIG_NXFONTS_PACKEDMSFIRST is not set
++# CONFIG_SYSLOG_CRLF is not set
+ CONFIG_ALARM_ARCH=y
+ CONFIG_ARCH="arm"
+ CONFIG_ARCH_BOARD_CUSTOM=y
+diff --git a/boards/best2003_ep/aos_evb_ax4d/configs/ota/defconfig b/boards/best2003_ep/aos_evb_ax4d/configs/ota/defconfig
+index 2efc7520..e969de2e 100644
+--- a/boards/best2003_ep/aos_evb_ax4d/configs/ota/defconfig
++++ b/boards/best2003_ep/aos_evb_ax4d/configs/ota/defconfig
+@@ -6,8 +6,6 @@
+ # modifications.
+ #
+ # CONFIG_ARCH_PERF_EVENTS is not set
+-# CONFIG_BES_SECURE_BOOT is not set
+-# CONFIG_SYSLOG_CRLF is not set
+ # CONFIG_BES_SPI is not set
+ # CONFIG_BES_SPI_DMA is not set
+ # CONFIG_BES_SPI_HAVE_SPI0 is not set
+@@ -19,6 +17,7 @@
+ # CONFIG_NSH_ARGCAT is not set
+ # CONFIG_NXFONTS_PACKEDMSFIRST is not set
+ # CONFIG_STANDARD_SERIAL is not set
++# CONFIG_SYSLOG_CRLF is not set
+ CONFIG_ALARM_ARCH=y
+ CONFIG_ARCH="arm"
+ CONFIG_ARCH_BOARD_CUSTOM=y
+@@ -49,7 +48,6 @@ CONFIG_ARM_MPU=y
+ CONFIG_BCH=y
+ CONFIG_BES2003_OTA=y
+ CONFIG_BES_BOOTMODE=y
+-CONFIG_BES_FLASH_SUSPEND=y
+ CONFIG_BES_LCD_A064=y
+ CONFIG_BES_LPUART0=y
+ CONFIG_BES_MTDSDMMC=y
+diff --git a/boards/best2003_ep/aos_evb_ax4d/src/CMakeLists.txt b/boards/best2003_ep/aos_evb_ax4d/src/CMakeLists.txt
+index 0f5691ad..51470c44 100755
+--- a/boards/best2003_ep/aos_evb_ax4d/src/CMakeLists.txt
++++ b/boards/best2003_ep/aos_evb_ax4d/src/CMakeLists.txt
+@@ -23,7 +23,8 @@ set(SRCS
+     audio.c
+     apc1.c
+     ota.c
+-    tee.c)
++    tee.c
++    daile_i2s_mirror.c)
+ 
+ if(CONFIG_ARCH_BOARD_CUSTOM_BES2003_EVB)
+   list(APPEND SRCS board_bes2003evb.c)
+diff --git a/boards/best2003_ep/aos_evb_ax4d/src/Make.defs b/boards/best2003_ep/aos_evb_ax4d/src/Make.defs
+index c81828d2..bfc88bb5 100644
+--- a/boards/best2003_ep/aos_evb_ax4d/src/Make.defs
++++ b/boards/best2003_ep/aos_evb_ax4d/src/Make.defs
+@@ -36,7 +36,12 @@
+ include $(TOPDIR)/Make.defs
+ 
+ CSRCS += ap.c audio.c apc1.c ota.c tee.c
+-
++# I2S mirror is MCU/AP only (needs audioflinger). Gate on AP chip symbol.
++ifeq ($(CONFIG_ARCH_CHIP_BES2003),y)
++CSRCS += daile_i2s_mirror.c
++CFLAGS += -I$(TOPDIR)/../vendor/bes/framework/services/services/audioflinger
++CFLAGS += -DCONFIG_DAILE_DAC_I2S_MIRROR
++endif
+ ifeq ($(CONFIG_ARCH_BOARD_CUSTOM_BES2003_EVB),y)
+ CSRCS +=  board_bes2003evb.c
+ endif
+diff --git a/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rc.sysinit b/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rc.sysinit
+index 9130732a..db45c292 100755
+--- a/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rc.sysinit
++++ b/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rc.sysinit
+@@ -21,5 +21,7 @@
+ #include <nuttx/config.h>
+ 
+ #ifdef CONFIG_KVDB_SERVER
++kvdbd &
+ usleep 10
+ #endif /* CONFIG_KVDB_SERVER */
++
+diff --git a/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rcS b/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rcS
+index 1d9f7af7..5bc4e094 100755
+--- a/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rcS
++++ b/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rcS
+@@ -27,7 +27,11 @@ set +e
+ #ifdef CONFIG_BES2003_AP
+ if [ $wifi.rftest.mode != 1 ]
+ then
++#ifdef CONFIG_BES_AX4D_WTSYNTH
++#  include "rcS.ap_wtsynth"
++#else
+ #  include "rcS.ap"
++#endif
+ fi
+ #elif defined(CONFIG_BES2003_AUDIO)
+ #if defined(CONFIG_GRAPHICS_LVGL9)
+diff --git a/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rcS.ap b/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rcS.ap
+index c041fb10..e83b5cdb 100644
+--- a/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rcS.ap
++++ b/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rcS.ap
+@@ -34,19 +34,23 @@ mount -t fatfs -o autoformat /dev/mmcsd1 /sdcard
+ mount -t fatfs -o autoformat /dev/mmcsd2 /sdcard
+ #else
+ #if defined(CONFIG_A7_FLASH_XIP)
++echo "rcS.ap: mount /data (rpmsgfs audio)"
+ mount -t rpmsgfs -o cpu=audio,fs=/sdcard /data
++echo "rcS.ap: mount /data done"
+ #else
++echo "rcS.ap: mount /sdcard (rpmsgfs audio)"
+ mount -t rpmsgfs -o cpu=audio,fs=/sdcard /sdcard
++echo "rcS.ap: mount /sdcard done"
+ #endif
+ #endif
+ 
+ #if defined(CONFIG_MTD) && !defined(CONFIG_A7_FLASH_XIP)
+-mount -t littlefs -o autoformat /dev/data /data
++echo "rcS.ap: skip littlefs /data (hangs on this board)"
+ #endif
+ 
+ 
+ #ifdef CONFIG_MEDIA_SERVER
+-echo "mediad start"
++echo "rcS.ap: mediad start"
+ mediad &
+ #else
+ 
+@@ -64,7 +68,7 @@ mkdir -p CONFIG_KVDB_PERSIST_PATH
+ #endif
+ 
+ #ifdef CONFIG_KVDB_SERVER
+-echo "kvdbd start"
++echo "rcS.ap: kvdbd start"
+ kvdbd &
+ #endif /* CONFIG_KVDB_SERVER */
+ 
+@@ -88,12 +92,15 @@ bttester &
+ #endif /* CONFIG_BT */
+ 
+ #ifdef CONFIG_BLUETOOTH_SERVER
++echo "rcS.ap: bluetoothd start"
+ bluetoothd &
+ #endif
+ 
+ #ifdef CONFIG_IEEE80211_BESTECHNIC_BES2003
+ #ifndef CONFIG_BES_IMS_DEMO
++echo "rcS.ap: ifup wlan0"
+ ifup wlan0
++echo "rcS.ap: ifup wlan0 done"
+ #endif
+ #endif /* CONFIG_IEEE80211_BESTECHNIC_BES2003 */
+ 
+@@ -106,3 +113,5 @@ if [ -d /data/factest ]; then
+     MSTC_KeyTestStart &
+ #endif
+ endif
++
++echo "rcS.ap: init scripts done"
+diff --git a/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rcS.audio b/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rcS.audio
+index 717ff3ea..04485cf8 100755
+--- a/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rcS.audio
++++ b/boards/best2003_ep/aos_evb_ax4d/src/etc/init.d/rcS.audio
+@@ -1,28 +1,16 @@
+ /****************************************************************************
+- * vendor/bes/boards/best1600_ep/src/etc/init.d/rcS.audio
+- *
+- * Licensed to the Apache Software Foundation (ASF) under one or more
+- * contributor license agreements.  See the NOTICE file distributed with
+- * this work for additional information regarding copyright ownership.  The
+- * ASF licenses this file to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance with the
+- * License.  You may obtain a copy of the License at
+- *
+- *   http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+- * License for the specific language governing permissions and limitations
+- * under the License.
+- *
++ * rcS.audio — A7 audio / SD / audible guitar PCM demo
+  ****************************************************************************/
+-#if defined(CONFIG_EXAMPLES_LVGLDEMO)
++#if defined(CONFIG_EXAMPLES_LVGLDEMO) && !defined(CONFIG_WAVETABLE_SYNTH_AUTOSTART)
+ lvgldemo benchmark &
+ #endif
+ 
+ #if defined(CONFIG_BES_MTDSDMMC)
+-mount -t fatfs -o autoformat /dev/mmcsd0 /sdcard
++/* Product TF layout: MBR partition 1 contains a DBNK image directly, with no
++ * filesystem. The SD driver exposes that raw partition as /dev/sdcard0.
++ */
++echo raw_sd_wait
++usleep 500000
+ #elif defined(CONFIG_BES_MTDSDMMC_EMMC)
+ mount -t fatfs -o autoformat /dev/mmcsd1 /sdcard
+ #elif defined(CONFIG_BES_MMCSD_SPI)
+@@ -31,7 +19,19 @@ mount -t fatfs -o autoformat /dev/mmcsd2 /sdcard
+ mount -t rpmsgfs -o cpu=ap,fs=/sdcard /sdcard
+ #endif
+ 
++#ifdef CONFIG_WAVETABLE_SYNTH_AUTOSTART
++/* Do not hard-sleep for AP. wtsynth polls /dev/audio/pcm0p (RPMSG client)
++ * for up to 20s; a short settle is enough for mediad/usbmidid to spawn.
++ */
++echo audio_wait_ap
++usleep 300000
++
++echo guitar_play_start
++/* Persistent USB-MIDI-controlled guitar synth. */
++wtsynth -pcm /dev/sdcard0 -midi -t 0 -v 900
++echo guitar_play_done
++#endif
++
+ #if !defined(CONFIG_BOOT_RUNFROMFLASH)
+ mount -t rpmsgfs -o cpu=ap,fs=/data /data
+ #endif
+-
+diff --git a/boards/best2003_ep/aos_evb_ax4d/src/etc/media/settings.pfw b/boards/best2003_ep/aos_evb_ax4d/src/etc/media/settings.pfw
+index 3a08742c..84328162 100644
+--- a/boards/best2003_ep/aos_evb_ax4d/src/etc/media/settings.pfw
++++ b/boards/best2003_ep/aos_evb_ax4d/src/etc/media/settings.pfw
+@@ -3,10 +3,10 @@ domain: SpeakerDomain
+ 		ALL
+ 			AvailableDevices Includes sco
+ 			UsingDevices     Includes sco
+-		FFmpegCommand = pcm0p,set_parameter,set_scenario=sco;MixSpeaker,weights,0 0 0 0 0 1;
++		FFmpegCommand = pcm0p,set_parameter,set_scenario=sco;amix,weights,0 0 0 0 0 0 0;
+ 	conf: music
+ 		ALL
+-		FFmpegCommand = pcm0p,set_parameter,set_scenario=music;MixSpeaker,weights,1 1 1 1 1 0;
++		FFmpegCommand = pcm0p,set_parameter,set_scenario=music;amix,weights,1 1 1 1 1 1 1;
+ 
+ domain: SCODomain
+ 	conf: phone
+diff --git a/boards/common/src/Make.defs b/boards/common/src/Make.defs
+index 1e57b9d9..b28cb778 100644
+--- a/boards/common/src/Make.defs
++++ b/boards/common/src/Make.defs
+@@ -89,6 +89,11 @@ endif
+ ifeq ($(CONFIG_AUDIO_RPMSG_CLIENT),y)
+ ifneq ($(CONFIG_ARCH_CHIP_BESHIFI4),y)
+ CSRCS += rpmsg_audio.c
++# DAILE: enable DAC→I2S0 mirror hooks in rpmsg_audio.c (AP only)
++ifeq ($(CONFIG_ARCH_CHIP_BES2003),y)
++CFLAGS += -DCONFIG_DAILE_DAC_I2S_MIRROR
++CFLAGS += -I$(TOPDIR)/arch/arm/src/board/board
++endif
+ endif
+ endif
+ 
+diff --git a/boards/common/src/rpmsg_audio.c b/boards/common/src/rpmsg_audio.c
+index aafce907..d2f0f2bf 100644
+--- a/boards/common/src/rpmsg_audio.c
++++ b/boards/common/src/rpmsg_audio.c
+@@ -49,6 +49,10 @@
+ #include <nuttx/kmalloc.h>
+ 
+ #include <nuttx/audio/audio.h>
++#ifdef CONFIG_DAILE_DAC_I2S_MIRROR
++#include "daile_i2s_mirror.h"
++#endif
++
+ #include <nuttx/audio/pcm.h>
+ #include <nuttx/mqueue.h>
+ #include <nuttx/mutex.h>
+@@ -998,8 +1002,21 @@ static uint32_t bes_rpmsg_capture_data(FAR struct bes_rpmsg_aud_dev_s *priv, uin
+ static uint32_t nuttx_audio_codec_playback_data(uint8_t *buf, uint32_t len)
+ {
+     FAR struct bes_rpmsg_aud_dev_s *priv = (FAR struct bes_rpmsg_aud_dev_s *)&bes_aud_dev[0];
++    uint32_t n;
+     audinfo( " %s:%d\n", __func__, __LINE__);
+-    return bes_rpmsg_playback_data(priv, buf, len);
++    n = bes_rpmsg_playback_data(priv, buf, len);
++#ifdef CONFIG_DAILE_DAC_I2S_MIRROR
++    if (n > 0)
++      {
++        uint8_t ch = priv->extend ? 1 : 2;
++        if (!daile_i2s_mirror_running())
++          {
++            (void)daile_i2s_mirror_start(44100, 16, ch);
++          }
++        daile_i2s_mirror_feed(buf, n, ch);
++      }
++#endif
++    return n;
+ }
+ 
+ static uint32_t nuttx_audio_codec_capture_data(uint8_t *buf, uint32_t len)
+@@ -1075,6 +1092,15 @@ static int bes_rpmsg_aud_configure(FAR struct audio_lowerhalf_s *dev,
+       {
+         priv->is_use_alsa =  false;
+         priv->handle = nuttx_audio_codec_open((struct audio_caps_s *)caps,nuttx_audio_codec_playback_data,priv->is_use_alsa);
++#ifdef CONFIG_DAILE_DAC_I2S_MIRROR
++        if (priv->handle)
++          {
++            uint32_t rate = caps->ac_controls.hw[0] ? caps->ac_controls.hw[0] : 44100;
++            uint8_t bits = caps->ac_controls.b[2] ? caps->ac_controls.b[2] : 16;
++            uint8_t ch = caps->ac_channels ? caps->ac_channels : 1;
++            (void)daile_i2s_mirror_start(rate, bits, ch);
++          }
++#endif
+       }
+       else if (priv->devicetype == AUD_STREAM_BT_PCM)
+       {
+diff --git a/chips/bes/Make.defs b/chips/bes/Make.defs
+index 3c73aab8..3db0f1fd 100644
+--- a/chips/bes/Make.defs
++++ b/chips/bes/Make.defs
+@@ -198,6 +198,11 @@ CHIP_CSRCS += bes_audio.c
+ endif
+ ifeq ($(CONFIG_AUDIO_RPMSG_SERVER),y)
+ CHIP_CSRCS += bes_rpmsg_audio_svr.c
++# DAILE: DAC→I2S0 mirror hooks in bes_rpmsg_audio_svr.c (AP)
++ifeq ($(CONFIG_ARCH_CHIP_BES2003),y)
++CFLAGS += -DCONFIG_DAILE_DAC_I2S_MIRROR
++CFLAGS += -I$(TOPDIR)/../boards/best2003_ep/aos_evb_ax4d/src
++endif
+ endif
+ endif
+ endif
+diff --git a/chips/bes/bes_audio.c b/chips/bes/bes_audio.c
+index 12ee3799..8b842916 100644
+--- a/chips/bes/bes_audio.c
++++ b/chips/bes/bes_audio.c
+@@ -49,6 +49,10 @@
+ 
+ #include <nuttx/audio/audio.h>
+ #include <nuttx/audio/pcm.h>
++
++#ifdef CONFIG_DAILE_DAC_I2S_MIRROR
++#include "daile_i2s_mirror.h"
++#endif
+ #include <nuttx/mqueue.h>
+ #include <arch/board/board.h>
+ 
+@@ -731,6 +735,16 @@ static uint32_t nuttx_audio_codec_playback_data(uint8_t *buf, uint32_t len)
+     nuttx_audio_extend((short *)buf, (short *)apb->samp, apb->nbytes/2);
+ #else
+     memcpy(buf, apb->samp, apb->nbytes);
++#endif
++#ifdef CONFIG_DAILE_DAC_I2S_MIRROR
++    {
++      uint8_t ch = CONFIG_AUDIO_BES_OUTPUT_CHANNELS;
++      if (!daile_i2s_mirror_running())
++        {
++          (void)daile_i2s_mirror_start(44100, 16, ch);
++        }
++      daile_i2s_mirror_feed(buf, len, ch);
++    }
+ #endif
+     nuttx_audio_process(priv->handle,buf,len);
+     apb->curbyte = apb->nbytes;
+diff --git a/chips/bes/bes_rpmsg_audio_svr.c b/chips/bes/bes_rpmsg_audio_svr.c
+index 7db91872..80f60526 100755
+--- a/chips/bes/bes_rpmsg_audio_svr.c
++++ b/chips/bes/bes_rpmsg_audio_svr.c
+@@ -55,6 +55,15 @@
+ #include <nuttx/rpmsg/rpmsg.h>
+ #include "../bes/include/rpmsg_audio.h"
+ 
++/* DAILE: force I2S mirror hooks even if Make.defs CFLAGS was dropped. */
++#ifndef CONFIG_DAILE_DAC_I2S_MIRROR
++#  define CONFIG_DAILE_DAC_I2S_MIRROR 1
++#endif
++
++#ifdef CONFIG_DAILE_DAC_I2S_MIRROR
++#include "daile_i2s_mirror.h"
++#endif
++
+ #if defined(CONFIG_BES_AUDIO_AW88266A) || defined(CONFIG_BES_AUDIO_CS35L41B) || \
+     defined(CONFIG_BES_AUDIO_FS1818U) || defined(CONFIG_BES_AUDIO_AW88394) || \
+     defined(CONFIG_BES_AUDIO_AW88166)
+@@ -739,6 +748,9 @@ static uint32_t nuttx_audio_codec_playback_data(uint8_t * buf, uint32_t len)
+           nuttx_med_stop(priv->handle);
+           nuttx_med_close(priv->handle);
+           priv->handle = 0;
++#ifdef CONFIG_DAILE_DAC_I2S_MIRROR
++          daile_i2s_mirror_stop();
++#endif
+ 
+           header.command = RPMSG_AUD_CMD_CALLBACK_COMPLETE;
+           header.len = sizeof(header);
+@@ -759,6 +771,34 @@ static uint32_t nuttx_audio_codec_playback_data(uint8_t * buf, uint32_t len)
+ #endif
+ 
+   nuttx_audio_process(priv->handle, buf, len);
++#ifdef CONFIG_DAILE_DAC_I2S_MIRROR
++  {
++    uint8_t ch = priv->caps.ac_channels ? priv->caps.ac_channels : 1;
++#if CONFIG_AUDIO_BES_OUTPUT_CHANNELS == 1 && defined(CONFIG_PLAYBACK_USE_I2S)
++    ch = 2;
++#endif
++    if (!daile_i2s_mirror_running())
++      {
++        uint32_t rate = priv->caps.ac_controls.hw[0]
++                          ? priv->caps.ac_controls.hw[0] : 44100;
++        uint8_t bits = 16; /* codec mirror path is int16 only */
++        (void)daile_i2s_mirror_start(rate, bits, ch);
++      }
++    /* Prefer real PCM bytes; DMA len may be stereo-extended. */
++    {
++      uint32_t feed_bytes = apb->nbytes;
++      if (ch >= 2)
++        {
++          feed_bytes = len;
++        }
++      else if (feed_bytes == 0 || feed_bytes > len)
++        {
++          feed_bytes = len;
++        }
++      daile_i2s_mirror_feed(buf, feed_bytes, ch);
++    }
++  }
++#endif
+ 
+   done = ((apb->flags & AUDIO_APB_FINAL) != 0);
+   if (done)
+@@ -1016,6 +1056,16 @@ static int bes_rpmsg_aud_svr_configure(FAR struct audio_lowerhalf_s *dev,
+           priv->handle =
+             nuttx_audio_codec_open(caps, nuttx_audio_codec_playback_data,
+                                    priv->is_use_alsa);
++#ifdef CONFIG_DAILE_DAC_I2S_MIRROR
++          if (priv->handle)
++            {
++              uint32_t rate = caps->ac_controls.hw[0] ? caps->ac_controls.hw[0]
++                                                     : 44100;
++              uint8_t bits = 16; /* codec mirror path is int16 only */
++              uint8_t ch = caps->ac_channels ? caps->ac_channels : 1;
++              (void)daile_i2s_mirror_start(rate, bits, ch);
++            }
++#endif
+         }
+       else if (priv->devicetype == AUD_STREAM_BT_PCM)
+         {
+@@ -1183,6 +1233,10 @@ static int bes_rpmsg_aud_svr_stop(FAR struct audio_lowerhalf_s *dev)
+   nuttx_med_stop(priv->handle);
+   nuttx_med_close(priv->handle);
+   priv->handle = 0;
++#ifdef CONFIG_DAILE_DAC_I2S_MIRROR
++  if (isCodecDev(priv))
++    daile_i2s_mirror_stop();
++#endif
+ #else
+   audinfo("[RPMSG_AUD] Entry: handle:0x%x,stop_pending=%d\n", priv->handle,
+           priv->stop_pending);
+diff --git a/chips/bes/bes_sdmmc.c b/chips/bes/bes_sdmmc.c
+index db813368..4864ccf5 100644
+--- a/chips/bes/bes_sdmmc.c
++++ b/chips/bes/bes_sdmmc.c
+@@ -51,19 +51,15 @@
+ #include <nuttx/drivers/rwbuffer.h>
+ #include <nuttx/sdio.h>
+ #include <nuttx/semaphore.h>
++#include <time.h>
+ #if defined(CONFIG_MMCSD_HAVE_CARDDETECT)
+ #include <arch/board/board.h>
+ #include <nuttx/ioexpander/ioexpander.h>
+ #endif
+-#include <nuttx/init.h>
+ #include "hal_sdmmc.h"
+ 
+ #include <arch/board/board.h>
+ #include <nuttx/ioexpander/ioexpander.h>
+-
+-#ifdef CONFIG_PM
+-#include <nuttx/power/pm.h>
+-#endif
+ /****************************************************************************
+  * Pre-processor Definitions
+  ****************************************************************************/
+@@ -74,13 +70,119 @@
+ 
+ #define MAX_CREFS               0xff
+ 
+-/* The data size of a single read/write is limited by the CONFIG_MMC_DMA_DESC_CNT,
+- * one desc can send and receive 16368(=4092*4) bytes */
+-#ifndef CONFIG_MMC_DMA_DESC_CNT
+-#  define CONFIG_MMC_DMA_DESC_CNT 4
++/* Match HAL DMA_XFER_TIMEOUT (5000 ms) for yield sem_wait. */
++#define BES_SDMMC_DMA_WAIT_SEC  5
++
++/****************************************************************************
++ * Private Data (DMA yield semaphore — free CPU while waiting on SD DMA)
++ ****************************************************************************/
++
++static sem_t g_sdmmc_dma_sem;
++static bool g_sdmmc_dma_sem_inited;
++
++static void bes_sdmmc_sem_init(void)
++{
++  if (!g_sdmmc_dma_sem_inited)
++    {
++      nxsem_init(&g_sdmmc_dma_sem, 0, 0);
++      g_sdmmc_dma_sem_inited = true;
++    }
++  else
++    {
++      while (nxsem_trywait(&g_sdmmc_dma_sem) >= 0)
++        {
++        }
++    }
++}
++
++static void bes_sdmmc_sem_reset(void)
++{
++  if (!g_sdmmc_dma_sem_inited)
++    {
++      return;
++    }
++  while (nxsem_trywait(&g_sdmmc_dma_sem) >= 0)
++    {
++    }
++}
++
++static void bes_sdmmc_sem_post(enum HAL_SDMMC_DEVICE_RW_T dir)
++{
++  (void)dir;
++  if (g_sdmmc_dma_sem_inited)
++    {
++      nxsem_post(&g_sdmmc_dma_sem);
++    }
++}
++
++static enum HAL_SDMMC_ERR_T bes_sdmmc_sem_wait(void)
++{
++  struct timespec abs;
++  int ret;
++
++  if (!g_sdmmc_dma_sem_inited)
++    {
++      return HAL_SDMMC_ERR_SEM;
++    }
++
++  if (clock_gettime(CLOCK_REALTIME, &abs) != 0)
++    {
++      /* Fallback: untimed wait (HAL still has outer DMA timeout). */
++      if (nxsem_wait(&g_sdmmc_dma_sem) == 0)
++        {
++          return HAL_SDMMC_ERR_NONE;
++        }
++      return HAL_SDMMC_ERR_SEM;
++    }
++
++  abs.tv_sec += BES_SDMMC_DMA_WAIT_SEC;
++  ret = nxsem_timedwait_uninterruptible(&g_sdmmc_dma_sem, &abs);
++  if (ret == 0)
++    {
++      return HAL_SDMMC_ERR_NONE;
++    }
++  if (ret == -ETIMEDOUT)
++    {
++      return HAL_SDMMC_DMA_XFER_TIMEOUT;
++    }
++  return HAL_SDMMC_ERR_SEM;
++}
++
++static struct HAL_SDMMC_CB_T g_bes_sdmmc_cb =
++{
++  .hal_sdmmc_signal_voltage_switch = NULL,
++  .hal_sdmmc_host_error = NULL,
++  .hal_sdmmc_txrx_done = NULL, /* HAL true-nonblock path is incomplete */
++  .hal_sdmmc_sem_init = bes_sdmmc_sem_init,
++  .hal_sdmmc_sem_reset = bes_sdmmc_sem_reset,
++  .hal_sdmmc_sem_post = bes_sdmmc_sem_post,
++  .hal_sdmmc_sem_wait = bes_sdmmc_sem_wait,
++};
++
++static void bes_sdmmc_cfg_defaults(FAR struct HAL_SDMMC_CONFIG_T *cfg)
++{
++  memset(cfg, 0, sizeof(*cfg));
++  cfg->yield = true; /* DMA wait via sem_wait — frees CPU1 for lower-prio work */
++  cfg->ddr_mode = false;
++  cfg->volt_switch = false;
++  cfg->device_type = HAL_SDMMC_DEVICE_TYPE_SD;
++  cfg->bus_speed = CONFIG_BES_SDMMC_SPEED;
++#if defined(CONFIG_SDIO_WIDTH_D1_ONLY)
++  cfg->bus_width = HAL_SDMMC_BUS_WIDTH_1;
++#else
++  cfg->bus_width = HAL_SDMMC_BUS_WIDTH_4;
+ #endif
++}
++
++static int bes_sdmmc_open_host(void)
++{
++  struct HAL_SDMMC_CONFIG_T cfg;
++
++  bes_sdmmc_cfg_defaults(&cfg);
++  hal_sdmmc_set_delay_us_func((HAL_SDMMC_DELAY_US_FUNC)usleep);
++  return (int)hal_sdmmc_open_ext(HAL_SDMMC_ID_0, &cfg, &g_bes_sdmmc_cb);
++}
+ 
+-#define SDMMC_MAX_TRANSFER_SIZE CONFIG_MMC_DMA_DESC_CNT * 16368
+ /****************************************************************************
+  * Private Types
+  ****************************************************************************/
+@@ -99,14 +201,14 @@ struct mmcsd_state_s
+   uint32_t nblocks;                /* Number of blocks */
+ 
+   /* Status flags */
+-
++  
+   uint8_t probed:1;                /* true: mmcsd_probe() discovered a card */
+   uint8_t widebus:1;               /* true: Wide 4-bit bus selected */
+   uint8_t mediachanged:1;          /* true: Media changed since last check */
+   uint8_t wrbusy:1;                /* true: Last transfer was a write, card may be busy */
+   uint8_t wrprotect:1;             /* true: Card is write protected (from CSD) */
+   uint8_t locked:1;                /* true: Media is locked (from R1) */
+-  uint8_t dsrimp:1;                /* true: card supports CMD4/DSR setting (from CSD) */
++  uint8_t dsrimp:1;                /* true: card supports CMD4/DSR setting (from CSD) */  
+   uint8_t mode:2;                  /* (See MMCSDMODE_* definitions) */
+   uint8_t type:4;                  /* Card type (See MMCSD_CARDTYPE_* definitions) */
+   uint8_t buswidth:4;              /* Bus widths supported (SD only) */
+@@ -120,14 +222,11 @@ struct mmcsd_state_s
+   /* Read-ahead and write buffering support */
+ 
+ #if defined(CONFIG_DRVR_WRITEBUFFER) || defined(CONFIG_DRVR_READAHEAD)
+-  struct rwbuffer_s rwbuffer;
++  struct rwbuffer_s rwb;
+ #endif
+ #if defined(CONFIG_MMCSD_HAVE_CARDDETECT)
+   struct ioexpander_dev_s * ioe;
+ #endif
+-#ifdef CONFIG_PM
+-  struct pm_wakelock_s wakelock;
+-#endif
+ };
+ 
+ static struct mmcsd_state_s *bes_sdmmc;
+@@ -137,6 +236,14 @@ static struct mmcsd_state_s *bes_sdmmc;
+  ****************************************************************************/
+ 
+ /* Misc Helpers *************************************************************/
++#ifdef DMA_BUFFER_SIZE
++static ssize_t mmcsd_bufwrite(FAR struct mmcsd_state_s *priv,
++                         FAR const unsigned char *buffer,
++                         blkcnt_t startsector, unsigned int nsectors);
++
++static ssize_t mmcsd_bufread(FAR struct mmcsd_state_s *priv, unsigned char *buffer,
++                          blkcnt_t startsector, unsigned int nsectors);
++#endif
+ 
+ static int try_sw_reset(int ret);
+ 
+@@ -152,8 +259,10 @@ static bool    mmcsd_wrprotected(FAR struct mmcsd_state_s *priv);
+ #if defined(CONFIG_DRVR_WRITEBUFFER) || defined(CONFIG_DRVR_READAHEAD)
+ static ssize_t mmcsd_flush(FAR void *dev, FAR const uint8_t *buffer,
+                  off_t startblock, size_t nblocks);
+-static ssize_t mmcsd_reload(FAR void *dev, FAR uint8_t *buffer,
+-                 off_t startblock, size_t nblocks);
++static ssize_t mmcsd_reload(FAR void *dev,
++                          FAR uint8_t *buffer,
++                          off_t startblock,
++                          size_t nblocks);
+ #endif
+ 
+ /* Block driver methods *****************************************************/
+@@ -199,20 +308,6 @@ static const struct block_operations g_bops =
+  * Misc Helpers
+  ****************************************************************************/
+ 
+-#ifdef CONFIG_SDIO_MUXBUS
+-static int mmcsd_lock(FAR struct mmcsd_state_s *priv, bool lock)
+-{
+-#ifdef CONFIG_PM
+-  if (lock) {
+-    pm_wakelock_stay(&priv->wakelock);
+-  } else {
+-    pm_wakelock_relax(&priv->wakelock);
+-  }
+-#endif
+-  return OK;
+-}
+-#endif
+-
+ static int mmcsd_takesem(FAR struct mmcsd_state_s *priv)
+ {
+   int ret;
+@@ -234,7 +329,7 @@ static int mmcsd_takesem(FAR struct mmcsd_state_s *priv)
+        */
+ 
+ #ifdef CONFIG_SDIO_MUXBUS
+-      mmcsd_lock(priv, TRUE);
++      SDIO_LOCK(priv->dev, TRUE);
+ #endif
+     }
+   else
+@@ -255,7 +350,7 @@ static void mmcsd_givesem(FAR struct mmcsd_state_s *priv)
+        */
+ 
+ #ifdef CONFIG_SDIO_MUXBUS
+-      mmcsd_lock(priv, FALSE);
++      SDIO_LOCK(priv->dev, FALSE);
+ #endif
+       nxsem_post(&priv->sem);
+     }
+@@ -306,91 +401,67 @@ static ssize_t mmcsd_flush(FAR void *dev, FAR const uint8_t *buffer,
+   DEBUGASSERT(priv != NULL && buffer != NULL && nblocks > 0);
+ 
+ #ifdef DMA_BUFFER_SIZE
+-  ret = mmcsd_bufwrite(priv, write_buf, startblock, nblocks);
++  ret = mmcsd_bufwrite(priv, write_buf, startblock,nblocks);
+ #else
+-  if (((uint32_t)buffer & 31) != 0)
+-    {
+-      write_buf = kmm_memalign(32, nblocks * priv->blocksize);
+-      finfo("buffer:%p not align with 32, nblocks=%d, use new write_buf:%p\n", buffer, nblocks, write_buf);
+-      DEBUGASSERT(write_buf);
+-      memcpy(write_buf, buffer, nblocks * priv->blocksize);
+-    }
++  if (((uint32_t)buffer & 63) != 0) {
++    write_buf = kmm_memalign(64, nblocks * priv->blocksize);
++    finfo("buffer:%p not align with 64, nblocks=%d, use new write_buf:%p\n", buffer, nblocks, write_buf);
++    DEBUGASSERT(write_buf);
++    memcpy(write_buf, buffer, nblocks * priv->blocksize);
++  }
++  /* Use either the single- or multiple-block transfer method */
+   irqstate_t flags = up_irq_save();
+   up_clean_dcache(write_buf, write_buf + nblocks * priv->blocksize);
+   up_irq_restore(flags);
+   uint8_t retry_count = 0;
+ retry:
+-  if (up_interrupt_context() || OSINIT_IS_PANIC())
+-    {
+-      ret = hal_sdmmc_write_blocks_polling(HAL_SDMMC_ID_0, startblock, nblocks, write_buf);
+-    }
+-  else
+-    {
+-      ret = hal_sdmmc_write_blocks(HAL_SDMMC_ID_0, startblock, nblocks, write_buf);
+-    }
++  ret = hal_sdmmc_write_blocks(HAL_SDMMC_ID_0, startblock, nblocks, write_buf);
+   if (try_sw_reset(ret) == 1 && retry_count++<3)
+    goto retry;
+   if (write_buf != buffer)
+-    {
+-      kmm_free(write_buf);
+-    }
++    kmm_free(write_buf);
+ #endif
+   if (ret != nblocks)
+-    {
+-      ferr("invalid ret:%d != nblocks:%d !!!!!!\n", ret, nblocks);
+-    }
++  {
++      ferr("invalid ret:%d != nblocks:%d !!!!!!\n", ret,nblocks);
++  }
+ 
+   //mmcsd_givesem(priv);
+   /* On success, return the number of blocks written */
+   return ret;
+ }
+ 
+-static ssize_t mmcsd_reload(FAR void *dev, FAR uint8_t *buffer,
+-                            off_t startblock, size_t nblocks)
++static ssize_t mmcsd_reload(FAR void *dev,
++                          FAR uint8_t *buffer,
++                          off_t startblock,
++                          size_t nblocks)
+ {
+   FAR struct mmcsd_state_s *priv = (FAR struct mmcsd_state_s *)dev;
+-  uint8_t *read_buf = buffer;
+   ssize_t ret;
+   finfo("startblock: %" PRIuOFF " nblocks: %u blocksize: %d buffer: %p\n",
+         startblock, nblocks, priv->blocksize, buffer);
++  if (nblocks == 0)
++    return 0;
+ 
+   DEBUGASSERT(priv != NULL && buffer != NULL && nblocks > 0);
+ 
+ #ifdef DMA_BUFFER_SIZE
+-  ret = mmcsd_bufread(priv, read_buf, startblock, nblocks);
++    ret = mmcsd_bufread(priv, buffer, startblock, nblocks);
+ #else
+-  if (((uint32_t)buffer & 31) != 0)
+-    {
+-      read_buf = kmm_memalign(32, nblocks * priv->blocksize);
+-      finfo("buffer:%p not align with 32, nblocks=%d, use new read_buf:%p\n", buffer, nblocks, read_buf);
+-      DEBUGASSERT(read_buf);
+-    }
+-  irqstate_t flags = up_irq_save();
+-  up_invalidate_dcache(read_buf, read_buf + nblocks * priv->blocksize);
+-  up_irq_restore(flags);
+-  uint8_t retry_count = 0;
++    DEBUGASSERT(((uint32_t)buffer & 63) == 0);
++    irqstate_t flags = up_irq_save();
++    up_invalidate_dcache(buffer, buffer + nblocks * priv->blocksize);
++    up_irq_restore(flags);
++    uint8_t retry_count = 0;
+ retry:
+-  if (up_interrupt_context() || OSINIT_IS_PANIC())
+-    {
+-      ret = hal_sdmmc_read_blocks_polling(HAL_SDMMC_ID_0, startblock, nblocks, read_buf);
+-    }
+-  else
+-    {
+-      ret = hal_sdmmc_read_blocks(HAL_SDMMC_ID_0, startblock, nblocks, read_buf);
+-    }
+-  if (try_sw_reset(ret) == 1 && retry_count++<3)
+-      goto retry;
+-
+-  if (read_buf != buffer)
+-    {
+-      memcpy(buffer, read_buf, nblocks * priv->blocksize);
+-      kmm_free(read_buf);
+-    }
++    ret = hal_sdmmc_read_blocks(HAL_SDMMC_ID_0, startblock, nblocks, buffer);
++    if (try_sw_reset(ret) == 1 && retry_count++<3)
++        goto retry;
+ #endif
+   if (ret != nblocks)
+-    {
+-      ferr("invalid ret:%d != nblocks:%d !!!!!!\n", ret, nblocks);
+-    }
++  {
++      ferr("invalid ret:%d != nblocks:%d !!!!!!\n", ret,nblocks);
++  }
+ 
+   //mmcsd_givesem(priv);
+   /* On success, return the number of blocks written */
+@@ -467,30 +538,21 @@ static int mmcsd_close(FAR struct inode *inode)
+  *   the physical device.
+  *
+  ****************************************************************************/
++#if !defined(CONFIG_DRVR_WRITEBUFFER) && !defined(CONFIG_DRVR_READAHEAD)
++#define DMA_BUFFER_SIZE 64*1024
++#endif
+ 
+-static void hal_sdmmc_signal_voltage_switch(enum MMC_VOLTAGE_T voltage)
+-{
+-    fwarn("------sdmmc voltage_switch:%d\n",voltage);
+-}
+-
+-POSSIBLY_UNUSED static void hal_sdmmc_host_error(enum HAL_SDMMC_HOST_ERR_T error)
+-{
+-  ferr("******sdmmc host error:%d\n", error);
+-  //FAR struct mmcsd_state_s *priv = (FAR struct mmcsd_state_s *)bes_sdmmc;
+-}
+-
+-static void hal_sdmmc_txrx_done(void)
+-{
+-  finfo("------sdmmc dma txrx done\n");
+-  //FAR struct mmcsd_state_s *priv = (FAR struct mmcsd_state_s *)bes_sdmmc;
+-}
+-
+-POSSIBLY_UNUSED static struct HAL_SDMMC_CB_T sdemmc_test_callback = {
+-  hal_sdmmc_signal_voltage_switch,
+-  hal_sdmmc_host_error,
+-  hal_sdmmc_txrx_done,
+-};
++#ifdef DMA_BUFFER_SIZE
++//#define DMA_BUFFER_UNCACHE
+ 
++#ifdef DMA_BUFFER_UNCACHE
++#define LOCATE_FLAGS locate_data(".sync_flags")
++#else  // DMA_BUFFER_UNCACHE
++#define LOCATE_FLAGS
++#endif // DMA_BUFFER_UNCACHE
++uint8_t read_dma_buf[DMA_BUFFER_SIZE] LOCATE_FLAGS aligned_data(64);
++uint8_t write_dma_buf[DMA_BUFFER_SIZE] LOCATE_FLAGS aligned_data(64);
++#endif // DMA_BUFFER_SIZE
+ 
+ static int try_sw_reset(int ret)
+ {
+@@ -499,18 +561,7 @@ static int try_sw_reset(int ret)
+     {
+         _err("need reset for last ret:0x%x,total_reset_count:%d\n",ret,total_reset_count);
+         hal_sdmmc_close(HAL_SDMMC_ID_0);
+-        struct HAL_SDMMC_CONFIG_T emmc_cfg = {0};
+-        emmc_cfg.ddr_mode = false;
+-        emmc_cfg.volt_switch = false;
+-        emmc_cfg.device_type = HAL_SDMMC_DEVICE_TYPE_SD;
+-        emmc_cfg.bus_speed = CONFIG_BES_SDMMC_SPEED;
+-#if defined(CONFIG_SDIO_WIDTH_D1_ONLY)
+-        emmc_cfg.bus_width = HAL_SDMMC_BUS_WIDTH_1;
+-#else
+-        emmc_cfg.bus_width = HAL_SDMMC_BUS_WIDTH_4;
+-#endif
+-        hal_sdmmc_set_delay_us_func((HAL_SDMMC_DELAY_US_FUNC)usleep);
+-        ret = hal_sdmmc_open_ext(HAL_SDMMC_ID_0, &emmc_cfg, &sdemmc_test_callback);
++        ret = bes_sdmmc_open_host();
+         _err("hal_sdmmc_open ret: %d\n", ret);
+         if (ret != 0)
+         {
+@@ -522,7 +573,7 @@ static int try_sw_reset(int ret)
+             usleep(100*1000);
+             IOEXP_WRITEPIN(ioe, GPIO_SD_PWR_PIN, 0);
+ #endif
+-            ret = hal_sdmmc_open_ext(HAL_SDMMC_ID_0, &emmc_cfg, &sdemmc_test_callback);
++            ret = bes_sdmmc_open_host();
+             _err("hal_sdmmc_open ret: %d after hw reset\n", ret);
+             if (ret != 0)
+             {
+@@ -535,16 +586,176 @@ static int try_sw_reset(int ret)
+     return 0;
+ }
+ 
++#ifdef DMA_BUFFER_SIZE
++static bool mmcsd_dma_direct_ok(FAR unsigned char *buffer, unsigned int nbytes,
++                                unsigned int blocksize)
++{
++  uintptr_t p = (uintptr_t)buffer;
++
++  if (buffer == NULL || nbytes == 0 || blocksize == 0)
++    {
++      return false;
++    }
++  /* 64B DMA alignment + whole sectors only. */
++  if ((p & 63u) != 0 || (nbytes % blocksize) != 0)
++    {
++      return false;
++    }
++  return true;
++}
++
++static ssize_t mmcsd_bufread(FAR struct mmcsd_state_s *priv, unsigned char *buffer,
++                          blkcnt_t startsector, unsigned int nsectors)
++{
++    ssize_t ret = nsectors;
++    unsigned int nbytes = nsectors * priv->blocksize;
++    bool direct = mmcsd_dma_direct_ok(buffer, nbytes, priv->blocksize);
++
++    /* Aligned caller buffer: DMA straight in, skip bounce memcpy. */
++    if (direct)
++      {
++#ifndef DMA_BUFFER_UNCACHE
++        irqstate_t flags = up_irq_save();
++        up_invalidate_dcache((uintptr_t)buffer, (uintptr_t)(buffer + nbytes));
++        up_irq_restore(flags);
++#endif
++        if (nbytes <= DMA_BUFFER_SIZE)
++          {
++            uint8_t retry_count = 0;
++          retry_direct1:
++            ret = hal_sdmmc_read_blocks(HAL_SDMMC_ID_0, startsector, nsectors,
++                                        buffer);
++            finfo("direct startsector: %" PRIuOFF " nsectors: %u ret: %d\n",
++                  startsector, nsectors, (int)ret);
++            if (try_sw_reset(ret) == 1 && retry_count++ < 3)
++              {
++                goto retry_direct1;
++              }
++            if (ret != nsectors)
++              {
++                return ret;
++              }
++#ifndef DMA_BUFFER_UNCACHE
++            flags = up_irq_save();
++            up_invalidate_dcache((uintptr_t)buffer, (uintptr_t)(buffer + nbytes));
++            up_irq_restore(flags);
++#endif
++            return nsectors;
++          }
++        else
++          {
++            uint32_t nsectors_dma = DMA_BUFFER_SIZE / priv->blocksize;
++            uint32_t cnt = nsectors / nsectors_dma;
++            int i;
++            for (i = 0; i < (int)cnt; i++)
++              {
++                uint8_t retry_count = 0;
++                unsigned char *dst =
++                  buffer + (size_t)i * nsectors_dma * priv->blocksize;
++              retry_direct2:
++                ret = hal_sdmmc_read_blocks(HAL_SDMMC_ID_0,
++                                             startsector + i * nsectors_dma,
++                                             nsectors_dma, dst);
++                if (try_sw_reset(ret) == 1 && retry_count++ < 3)
++                  {
++                    goto retry_direct2;
++                  }
++                if (ret != (ssize_t)nsectors_dma)
++                  {
++                    return i;
++                  }
++              }
++            if (nsectors > cnt * nsectors_dma)
++              {
++                uint8_t retry_count = 0;
++                unsigned int rem = nsectors - cnt * nsectors_dma;
++                unsigned char *dst =
++                  buffer + (size_t)cnt * nsectors_dma * priv->blocksize;
++              retry_direct3:
++                ret = hal_sdmmc_read_blocks(HAL_SDMMC_ID_0,
++                                             startsector + cnt * nsectors_dma,
++                                             rem, dst);
++                if (try_sw_reset(ret) == 1 && retry_count++ < 3)
++                  {
++                    goto retry_direct3;
++                  }
++                if (ret != (ssize_t)rem)
++                  {
++                    return 0;
++                  }
++              }
++#ifndef DMA_BUFFER_UNCACHE
++            {
++              irqstate_t flags2 = up_irq_save();
++              up_invalidate_dcache((uintptr_t)buffer, (uintptr_t)(buffer + nbytes));
++              up_irq_restore(flags2);
++            }
++#endif
++            return nsectors;
++          }
++      }
++
++#ifndef DMA_BUFFER_UNCACHE
++    {
++    irqstate_t flags = up_irq_save();
++    up_invalidate_dcache(read_dma_buf, read_dma_buf + DMA_BUFFER_SIZE);
++    up_irq_restore(flags);
++    }
++#endif
++    if (nsectors*priv->blocksize <= DMA_BUFFER_SIZE)
++    {
++        uint8_t retry_count = 0;
++    retry1:
++        ret = hal_sdmmc_read_blocks(HAL_SDMMC_ID_0, startsector, nsectors, (uint8_t *)read_dma_buf);
++        finfo("startsector: %" PRIuOFF " nsectors: %u sectorsize: %d, ret: %d, retry_count:%d\n",
++            startsector, nsectors, priv->blocksize, ret,retry_count);
++        if (try_sw_reset(ret) == 1 && retry_count++<3)
++            goto retry1;
++        if (ret != nsectors)
++            return ret;
++
++        memcpy(buffer,read_dma_buf,nsectors*priv->blocksize);
++        return nsectors;
++    }
++    else
++    {
++        uint32_t nsectors_dma = DMA_BUFFER_SIZE/priv->blocksize;
++        uint32_t cnt = nsectors/nsectors_dma;
++        int i;
++        fwarn("startsector: %" PRIuOFF " nsectors: %u sectorsize: %d, nsectors_dma: %d, cnt: %d\n",
++            startsector, nsectors, priv->blocksize, nsectors_dma, cnt);
++        for (i=0; i<cnt; i++)
++        {
++            uint8_t retry_count = 0;
++        retry2:
++            ret = hal_sdmmc_read_blocks(HAL_SDMMC_ID_0, startsector+i*nsectors_dma, nsectors_dma, (uint8_t *)read_dma_buf);
++            if (try_sw_reset(ret) == 1 && retry_count++<3)
++                goto retry2;
++            if (ret != nsectors_dma)
++                return i;
++            memcpy(buffer+i*nsectors_dma*priv->blocksize,read_dma_buf,DMA_BUFFER_SIZE);
++        }
++        if (nsectors*priv->blocksize > cnt*DMA_BUFFER_SIZE)
++        {
++            uint8_t retry_count = 0;
++        retry3:
++            ret = hal_sdmmc_read_blocks(HAL_SDMMC_ID_0, startsector+i*nsectors_dma, nsectors-i*nsectors_dma, (uint8_t *)read_dma_buf);
++            if (try_sw_reset(ret) == 1 && retry_count++<3)
++                goto retry3;
++            if (ret != nsectors-i*nsectors_dma)
++                return 0;
++            memcpy(buffer+i*nsectors_dma*priv->blocksize,read_dma_buf,(nsectors-i*nsectors_dma)*priv->blocksize);
++        }
++        return nsectors;
++    }
++}
++#endif
++
+ static ssize_t mmcsd_read(FAR struct inode *inode, unsigned char *buffer,
+                           blkcnt_t startsector, unsigned int nsectors)
+ {
+   FAR struct mmcsd_state_s *priv;
+   ssize_t ret = nsectors;
+-  uint8_t *read_buf = buffer;
+-  size_t sector;
+-  size_t endsector;
+-  size_t nread;
+-  size_t nret;
+ 
+   DEBUGASSERT(inode && inode->i_private);
+   priv = (FAR struct mmcsd_state_s *)inode->i_private;
+@@ -554,7 +765,7 @@ static ssize_t mmcsd_read(FAR struct inode *inode, unsigned char *buffer,
+     {
+       ferr("startsector: %" PRIuOFF " nsectors: %u sectorsize: %d exceeds max blocks: %u\n",
+             startsector, nsectors, priv->blocksize, priv->nblocks);
+-      return -EINVAL;
++      return -1;
+     }
+ 
+   if (nsectors > 0)
+@@ -565,65 +776,31 @@ static ssize_t mmcsd_read(FAR struct inode *inode, unsigned char *buffer,
+           return (ssize_t)ret;
+         }
+ 
+-      ret = nsectors;
+-      endsector = startsector + nsectors;
+-      for (sector = startsector; sector < endsector; sector += nread)
+-        {
+-          nread = endsector - sector;
+-          if ((nread * priv->blocksize) > SDMMC_MAX_TRANSFER_SIZE)
+-            {
+-              nread = SDMMC_MAX_TRANSFER_SIZE / priv->blocksize;
+-            }
+-
+ #if defined(CONFIG_DRVR_WRITEBUFFER) || defined(CONFIG_DRVR_READAHEAD)
+-          /* Get the data from the read-ahead buffer */
++      /* Get the data from the read-ahead buffer */
+ 
+-          nret = rwb_read(&priv->rwbuffer, sector, nread, buffer);
++      ret = rwb_read(&priv->rwb, startsector, nsectors, buffer);
+ #else
+-          /* Use either the single- or multiple-block transfer method */
++      /* Use either the single- or multiple-block transfer method */
+ #ifdef DMA_BUFFER_SIZE
+-          nret = mmcsd_bufread(priv, buffer, sector, nread);
++      ret = mmcsd_bufread(priv, buffer, startsector, nsectors);
+ #else
+-          if (((uint32_t)buffer & 31) != 0)
+-            {
+-              read_buf = kmm_memalign(32, nread * priv->blocksize);
+-              finfo("buffer:%p not align with 32, nread=%d, use new read_buf:%p\n", buffer, nread, read_buf);
+-              DEBUGASSERT(read_buf);
+-            }
+-          irqstate_t flags = up_irq_save();
+-          up_invalidate_dcache(read_buf, read_buf + nread * priv->blocksize);
+-          up_irq_restore(flags);
+-          uint8_t retry_count = 0;
++      DEBUGASSERT(((uint32_t)buffer & 63) == 0);
++      irqstate_t flags = up_irq_save();
++      up_invalidate_dcache(buffer, buffer+nsectors*priv->blocksize);
++      up_irq_restore(flags);
++      uint8_t retry_count = 0;
+ retry:
+-          if (up_interrupt_context() || OSINIT_IS_PANIC())
+-            {
+-              nret = hal_sdmmc_read_blocks_polling(HAL_SDMMC_ID_0, sector, nread, read_buf);
+-            }
+-          else
+-            {
+-              nret = hal_sdmmc_read_blocks(HAL_SDMMC_ID_0, sector, nread, read_buf);
+-            }
+-          if (try_sw_reset(ret) == 1 && retry_count++<3)
+-              goto retry;
+-          if (read_buf != buffer)
+-            {
+-              memcpy(buffer, read_buf, nread * priv->blocksize);
+-              kmm_free(read_buf);
+-            }
++      ret = hal_sdmmc_read_blocks(HAL_SDMMC_ID_0, startsector, nsectors, buffer);
++      if (try_sw_reset(ret) == 1 && retry_count++<3)
++          goto retry;
+ #endif
+ #endif
+-          /* return error  */
+-          if (nret != nread)
+-            {
+-              ret = nret;
+-              ferr("invalid ret:%d != nread:%d !!!!!!\n", ret, nread);
+-              break;
+-            }
++      if (ret != nsectors)
++      {
++          ferr("invalid ret:%d != nsectors:%d !!!!!!\n", ret,nsectors);
++      }
+ 
+-          /* Incrment the buffer pointer by the sector size */
+-          buffer += nread * priv->blocksize;
+-          read_buf = buffer;
+-        }
+       mmcsd_givesem(priv);
+     }
+ 
+@@ -641,17 +818,79 @@ retry:
+  *
+  ****************************************************************************/
+ 
++#ifdef DMA_BUFFER_SIZE
++static ssize_t mmcsd_bufwrite(FAR struct mmcsd_state_s *priv,
++                         FAR const unsigned char *buffer,
++                         blkcnt_t startsector, unsigned int nsectors)
++{
++    ssize_t ret = nsectors;
++
++    if (nsectors*priv->blocksize <= DMA_BUFFER_SIZE)
++    {
++         memcpy(write_dma_buf, buffer, nsectors*priv->blocksize);
++#ifndef DMA_BUFFER_UNCACHE
++        irqstate_t flags = up_irq_save();
++        up_clean_dcache(write_dma_buf, write_dma_buf + nsectors * priv->blocksize);
++        up_irq_restore(flags);
++#endif
++         uint8_t retry_count = 0;
++    retry1:
++         ret = hal_sdmmc_write_blocks(HAL_SDMMC_ID_0, startsector, nsectors, (uint8_t *)write_dma_buf);
++         finfo("startsector: %" PRIuOFF " nsectors: %u sectorsize: %d, ret: %d, retry_count:%d\n",
++             startsector, nsectors, priv->blocksize, ret,retry_count);
++         if (try_sw_reset(ret) == 1 && retry_count++<3)
++             goto retry1;
++         return ret;
++    }
++    else
++    {
++        uint32_t nsectors_dma = DMA_BUFFER_SIZE/priv->blocksize;
++        uint32_t cnt = nsectors/nsectors_dma;
++        int i;
++        fwarn("startsector: %" PRIuOFF " nsectors: %u sectorsize: %d, nsectors_dma: %d, cnt: %d\n",
++           startsector, nsectors, priv->blocksize, nsectors_dma, cnt);
++        for (i=0; i<cnt; i++)
++        {
++            memcpy(write_dma_buf, buffer+i*nsectors_dma*priv->blocksize, DMA_BUFFER_SIZE);
++#ifndef DMA_BUFFER_UNCACHE
++            irqstate_t flags = up_irq_save();
++            up_clean_dcache(write_dma_buf, write_dma_buf + DMA_BUFFER_SIZE);
++            up_irq_restore(flags);
++#endif
++            uint8_t retry_count = 0;
++        retry2:
++            ret = hal_sdmmc_write_blocks(HAL_SDMMC_ID_0, startsector+i*nsectors_dma, nsectors_dma, (uint8_t *)write_dma_buf);
++            if (try_sw_reset(ret) == 1 && retry_count++<3)
++                goto retry2;
++            if (ret != nsectors_dma)
++                return i;
++        }
++        if (nsectors*priv->blocksize > cnt*DMA_BUFFER_SIZE)
++        {
++            memcpy(write_dma_buf, buffer+i*nsectors_dma*priv->blocksize, (nsectors-i*nsectors_dma)*priv->blocksize);
++#ifndef DMA_BUFFER_UNCACHE
++            irqstate_t flags = up_irq_save();
++            up_clean_dcache(write_dma_buf, write_dma_buf + (nsectors-i*nsectors_dma)*priv->blocksize);
++            up_irq_restore(flags);
++#endif
++            uint8_t retry_count = 0;
++        retry3:
++            ret = hal_sdmmc_write_blocks(HAL_SDMMC_ID_0, startsector+i*nsectors_dma, nsectors-i*nsectors_dma, (uint8_t *)write_dma_buf);
++            if (try_sw_reset(ret) == 1 && retry_count++<3)
++                goto retry3;
++            if (ret != (nsectors-i*nsectors_dma))
++             return 0;
++        }
++        return nsectors;
++    }
++}
++#endif
+ static ssize_t mmcsd_write(FAR struct inode *inode,
+                            FAR const unsigned char *buffer,
+                            blkcnt_t startsector, unsigned int nsectors)
+ {
+   FAR struct mmcsd_state_s *priv;
+   ssize_t ret = nsectors;
+-  uint8_t *write_buf = buffer;
+-  size_t sector;
+-  size_t endsector;
+-  size_t nwrite;
+-  size_t nret;
+ 
+   DEBUGASSERT(inode && inode->i_private);
+   priv = (FAR struct mmcsd_state_s *)inode->i_private;
+@@ -662,7 +901,7 @@ static ssize_t mmcsd_write(FAR struct inode *inode,
+     {
+       ferr("startsector: %" PRIuOFF " nsectors: %u sectorsize: %d exceeds max blocks: %u\n",
+             startsector, nsectors, priv->blocksize, priv->nblocks);
+-      return -EINVAL;
++      return -1;
+     }
+ 
+   if (nsectors > 0)
+@@ -673,67 +912,32 @@ static ssize_t mmcsd_write(FAR struct inode *inode,
+           return (ssize_t)ret;
+         }
+ 
+-      ret = nsectors;
+-      endsector = startsector + nsectors;
+-      for (sector = startsector; sector < endsector; sector += nwrite)
+-        {
+-          nwrite = endsector - sector;
+-          if ((nwrite * priv->blocksize) > SDMMC_MAX_TRANSFER_SIZE)
+-            {
+-              nwrite = SDMMC_MAX_TRANSFER_SIZE / priv->blocksize;
+-            }
+-
+ #if defined(CONFIG_DRVR_WRITEBUFFER) || defined(CONFIG_DRVR_READAHEAD)
+-          /* Write the data to the write buffer */
++      /* Write the data to the write buffer */
+ 
+-          nret = rwb_write(&priv->rwbuffer, sector, nwrite, buffer);
++      ret = rwb_write(&priv->rwb, startsector, nsectors, buffer);
+ 
+ #else
+ #ifdef DMA_BUFFER_SIZE
+-          nret = mmcsd_bufwrite(priv, buffer, sector, nwrite);
++    ret = mmcsd_bufwrite(priv, buffer, startsector,nsectors);
+ #else
+-          /* Use either the single- or multiple-block transfer method */
+-          if (((uint32_t)buffer & 31) != 0)
+-            {
+-              write_buf = kmm_memalign(32, nwrite * priv->blocksize);
+-              finfo("buffer:%p not align with 32, nwrite=%d, use new write_buf:%p\n", buffer, nwrite, write_buf);
+-              DEBUGASSERT(write_buf);
+-              memcpy(write_buf, buffer, nwrite * priv->blocksize);
+-            }
+-
+-          irqstate_t flags = up_irq_save();
+-          up_clean_dcache(write_buf, write_buf + nwrite * priv->blocksize);
+-          up_irq_restore(flags);
+-          uint8_t retry_count = 0;
++    /* Use either the single- or multiple-block transfer method */
++    DEBUGASSERT(((uint32_t)buffer & 63) == 0);
++    irqstate_t flags = up_irq_save();
++    up_clean_dcache(buffer,buffer+nsectors*priv->blocksize);
++    up_irq_restore(flags);
++    uint8_t retry_count = 0;
+ retry:
+-          if (up_interrupt_context() || OSINIT_IS_PANIC())
+-            {
+-              nret = hal_sdmmc_write_blocks_polling(HAL_SDMMC_ID_0, sector, nwrite, write_buf);
+-            }
+-          else
+-            {
+-              nret = hal_sdmmc_write_blocks(HAL_SDMMC_ID_0, sector, nwrite, write_buf);
+-            }
+-          if (try_sw_reset(ret) == 1 && retry_count++<3)
+-            goto retry;
+-          if (write_buf != buffer)
+-            {
+-              kmm_free(write_buf);
+-            }
++    ret = hal_sdmmc_write_blocks(HAL_SDMMC_ID_0, startsector, nsectors, buffer);
++    if (try_sw_reset(ret) == 1 && retry_count++<3)
++       goto retry;
+ #endif
+ #endif
+-          /* return error  */
+-          if (nret != nwrite)
+-            {
+-              ret = nwrite;
+-              ferr("invalid ret:%d != nwrite:%d !!!!!!\n", ret, nwrite);
+-              break;
+-            }
++      if (ret != nsectors)
++      {
++          ferr("invalid ret:%d != nsectors:%d !!!!!!\n", ret,nsectors);
++      }
+ 
+-          /* Incrment the buffer pointer by the sector size */
+-          buffer += nwrite * priv->blocksize;
+-          write_buf = buffer;
+-        }
+       mmcsd_givesem(priv);
+     }
+ 
+@@ -853,13 +1057,13 @@ static int mmcsd_ioctl(FAR struct inode *inode, int cmd, unsigned long arg)
+       break;
+     case BIOC_FLUSH:
+       {
+-        finfo("BIOC_FLUSH\n");
+-#if defined(CONFIG_DRVR_WRITEBUFFER) || defined(CONFIG_DRVR_READAHEAD)
+-        ret = rwb_flush(&priv->rwbuffer);
+-        if (ret != OK)
+-          {
+-            ferr("ERROR: BIOC_FLUSH failed: %d\n", ret);
+-          }
++          finfo("BIOC_FLUSH\n");
++#if defined(CONFIG_DRVR_WRITEBUFFER)
++          ret = rwb_flush(&priv->rwb);
++          if (ret != OK)
++            {
++              ferr("ERROR: BIOC_FLUSH failed: %d\n", ret);
++            }
+ #endif
+       }
+       break;
+@@ -889,7 +1093,7 @@ static int mmcsd_ioctl(FAR struct inode *inode, int cmd, unsigned long arg)
+  *   handler; it is probably running in the context of work thread.
+  *
+  ****************************************************************************/
+-#if defined(CONFIG_GPT_PARTITION)
++#if defined(CONFIG_GPT_PARTITION) || defined(CONFIG_MBR_PARTITION)
+ 
+ static void bes_partition_handler(FAR struct partition_s *part,
+                                   FAR void *path)
+@@ -897,53 +1101,51 @@ static void bes_partition_handler(FAR struct partition_s *part,
+     char dev[PATH_MAX];
+     int ret;
+ 
+-#if defined(CONFIG_BES2003_OTA)
+-    if (0x5a5a5a5a == get_ota_info(4))
+-    {
+-      if (strcmp(part->name, "recovery") == 0)
+-        {
+-          strcpy((char *)part->name, "recovery_b");
+-          fwarn("recovery change to %s\n", part->name);
+-        }
+-      else if (strcmp(part->name, "recovery_b") == 0)
+-        {
+-          strcpy((char *)part->name, "recovery");
+-          fwarn("recovery_b change to %s\n", part->name);
+-        }
+-    }
+-#endif
++    /* GPT partitions have names; MBR partitions do not.  Always expose the
++     * first usable partition through a stable path for rcS.audio.
++     */
++
++    if (part->name[0] != '\0')
++      {
++        snprintf(dev, sizeof(dev), "/dev/%s", part->name);
++        ret = register_blockpartition(dev, 0, path,
++                                      part->firstblock, part->nblocks);
++        if (ret < 0)
++          {
++            ferr("ERROR: Failed to register block device: %s %d\n",
++                 part->name, ret);
++          }
++      }
+ 
+-    snprintf(dev, sizeof(dev), "/dev/%s", part->name);
+-    ret = register_blockpartition(dev, 0, path, part->firstblock, part->nblocks);
+-    if (ret < 0)
++    if (part->index == 0)
+       {
+-        ferr("ERROR: Failed to register block device: %s %d\n", part->name, ret);
++        ret = register_blockpartition("/dev/sdcard0", 0, path,
++                                      part->firstblock, part->nblocks);
++        if (ret < 0)
++          {
++            ferr("ERROR: Failed to register /dev/sdcard0: %d\n", ret);
++          }
++        else
++          {
++            fwarn("Register stable SD partition:/dev/sdcard0\n");
++          }
+       }
+ 
+     fwarn("Register block device:%s, first:%d, nblocks:%d, blocksize:%d\n",
+-          part->name, part->firstblock, part->nblocks, part->blocksize);
++          part->name[0] ? part->name : "(MBR)",
++          part->firstblock, part->nblocks, part->blocksize);
+ }
+ 
+-#endif /* CONFIG_GPT_PARTITION */
++#endif /* CONFIG_GPT_PARTITION || CONFIG_MBR_PARTITION */
+ 
+ static void do_sd_mount(void *arg)
+ {
+   uint32_t nblocks, block_size;
+   FAR struct mmcsd_state_s *priv = (FAR struct mmcsd_state_s *)arg;
+   /* Initialize the hardware associated with the slot */
+-  struct HAL_SDMMC_CONFIG_T emmc_cfg = {0};
+   struct HAL_SDMMC_CARD_INFO_T card_info = {0};
+-  emmc_cfg.ddr_mode = false;
+-  emmc_cfg.volt_switch = false;
+-  emmc_cfg.bus_speed = CONFIG_BES_SDMMC_SPEED;
+-  emmc_cfg.device_type = HAL_SDMMC_DEVICE_TYPE_SD;
+-#if defined(CONFIG_SDIO_WIDTH_D1_ONLY)
+-  emmc_cfg.bus_width = HAL_SDMMC_BUS_WIDTH_1;
+-#else
+-  emmc_cfg.bus_width = HAL_SDMMC_BUS_WIDTH_4;
+-#endif
+-  hal_sdmmc_set_delay_us_func((HAL_SDMMC_DELAY_US_FUNC)usleep);
+-  int ret = hal_sdmmc_open_ext(HAL_SDMMC_ID_0, &emmc_cfg, &sdemmc_test_callback);
++  int ret = bes_sdmmc_open_host();
++  fwarn("bes_sdmmc: open with DMA yield=sem\n");
+   if (ret != 0)
+     {
+       ferr("ERROR: hal_sdmmc_open failed: %d\n", ret);
+@@ -978,35 +1180,35 @@ static void do_sd_mount(void *arg)
+       goto errout_with_alloc;
+     }
+ #if defined(CONFIG_DRVR_WRITEBUFFER) || defined(CONFIG_DRVR_READAHEAD)
+-  memset(&priv->rwbuffer, 0, sizeof(priv->rwbuffer));
+-  priv->rwbuffer.blocksize = priv->blocksize;
+-  priv->rwbuffer.nblocks   = priv->nblocks;
++  memset(&priv->rwb, 0, sizeof(priv->rwb));
++  priv->rwb.blocksize = priv->blocksize;
++  priv->rwb.nblocks   = priv->nblocks;
+ 
+   /* Buffer setup */
+ 
+   #ifdef CONFIG_DRVR_WRITEBUFFER
+-  priv->rwbuffer.wrmaxblocks = 64;
++  priv->rwb.wrmaxblocks = 128;
+   #endif
+   #ifdef CONFIG_DRVR_READAHEAD
+-  priv->rwbuffer.rhmaxblocks = 64;
++  priv->rwb.rhmaxblocks = 128;
+   #endif
+ 
+   /* Callouts */
+ 
+-  priv->rwbuffer.dev       = priv;             /* Device state passed to callouts */
+-  priv->rwbuffer.wrflush   = mmcsd_flush;      /* Callout to flush buffer */
+-  priv->rwbuffer.rhreload  = mmcsd_reload;       /* Callout to reload buffer */
++  priv->rwb.dev       = priv;             /* Device state passed to callouts */
++  priv->rwb.wrflush   = mmcsd_flush;      /* Callout to flush buffer */
++  priv->rwb.rhreload  = mmcsd_reload;       /* Callout to reload buffer */
+ 
+   /* Initialize read-ahead/write buffering */
+ 
+-  ret = rwb_initialize(&priv->rwbuffer);
++  ret = rwb_initialize(&priv->rwb);
+   if (ret < 0)
+     {
+       ferr("ERROR: rwb_initialize failed: %d\n", ret);
+     }
+ #endif
+ 
+-#if defined(CONFIG_GPT_PARTITION)
++#if defined(CONFIG_GPT_PARTITION) || defined(CONFIG_MBR_PARTITION)
+   ret = parse_block_partition("/dev/mmcsd0", bes_partition_handler, "/dev/mmcsd0");
+   if (ret < 0)
+   {
+@@ -1036,7 +1238,7 @@ static void do_sd_unmount(void *arg)
+   hal_sdmmc_close(HAL_SDMMC_ID_0);
+ #if defined(CONFIG_DRVR_WRITEBUFFER) || defined(CONFIG_DRVR_READAHEAD)
+ FAR struct mmcsd_state_s *priv = (FAR struct mmcsd_state_s *)arg;
+-  rwb_uninitialize(&priv->rwbuffer);
++  rwb_uninitialize(&priv->rwb);
+ #endif
+ }
+ 
+@@ -1289,12 +1491,6 @@ int bes_mmcsd_slotinitialize(int minor)
+ 
+       memset(priv, 0, sizeof(struct mmcsd_state_s));
+       nxsem_init(&priv->sem, 0, 1);
+-
+-#ifdef CONFIG_PM
+-      pm_wakelock_init(&priv->wakelock, "sdmmc", PM_IDLE_DOMAIN, PM_NORMAL);
+-      pm_wakelock_stay(&priv->wakelock);
+-#endif
+-
+       bes_sdmmc = priv;
+ 
+ #ifdef CONFIG_86V1_HW_V2
+@@ -1314,10 +1510,6 @@ int bes_mmcsd_slotinitialize(int minor)
+       fwarn("is_plugout: %d\n", is_plugout);
+       if (!is_plugout)
+         do_sd_mount(priv);
+-
+-#ifdef CONFIG_PM
+-      pm_wakelock_relax(&priv->wakelock);
+-#endif
+     }
+ 
+   return 0;
+diff --git a/chips/besa7/bes_sdmmc.c b/chips/besa7/bes_sdmmc.c
+index 08bd1d6f..4864ccf5 100755
+--- a/chips/besa7/bes_sdmmc.c
++++ b/chips/besa7/bes_sdmmc.c
+@@ -51,6 +51,7 @@
+ #include <nuttx/drivers/rwbuffer.h>
+ #include <nuttx/sdio.h>
+ #include <nuttx/semaphore.h>
++#include <time.h>
+ #if defined(CONFIG_MMCSD_HAVE_CARDDETECT)
+ #include <arch/board/board.h>
+ #include <nuttx/ioexpander/ioexpander.h>
+@@ -69,6 +70,119 @@
+ 
+ #define MAX_CREFS               0xff
+ 
++/* Match HAL DMA_XFER_TIMEOUT (5000 ms) for yield sem_wait. */
++#define BES_SDMMC_DMA_WAIT_SEC  5
++
++/****************************************************************************
++ * Private Data (DMA yield semaphore — free CPU while waiting on SD DMA)
++ ****************************************************************************/
++
++static sem_t g_sdmmc_dma_sem;
++static bool g_sdmmc_dma_sem_inited;
++
++static void bes_sdmmc_sem_init(void)
++{
++  if (!g_sdmmc_dma_sem_inited)
++    {
++      nxsem_init(&g_sdmmc_dma_sem, 0, 0);
++      g_sdmmc_dma_sem_inited = true;
++    }
++  else
++    {
++      while (nxsem_trywait(&g_sdmmc_dma_sem) >= 0)
++        {
++        }
++    }
++}
++
++static void bes_sdmmc_sem_reset(void)
++{
++  if (!g_sdmmc_dma_sem_inited)
++    {
++      return;
++    }
++  while (nxsem_trywait(&g_sdmmc_dma_sem) >= 0)
++    {
++    }
++}
++
++static void bes_sdmmc_sem_post(enum HAL_SDMMC_DEVICE_RW_T dir)
++{
++  (void)dir;
++  if (g_sdmmc_dma_sem_inited)
++    {
++      nxsem_post(&g_sdmmc_dma_sem);
++    }
++}
++
++static enum HAL_SDMMC_ERR_T bes_sdmmc_sem_wait(void)
++{
++  struct timespec abs;
++  int ret;
++
++  if (!g_sdmmc_dma_sem_inited)
++    {
++      return HAL_SDMMC_ERR_SEM;
++    }
++
++  if (clock_gettime(CLOCK_REALTIME, &abs) != 0)
++    {
++      /* Fallback: untimed wait (HAL still has outer DMA timeout). */
++      if (nxsem_wait(&g_sdmmc_dma_sem) == 0)
++        {
++          return HAL_SDMMC_ERR_NONE;
++        }
++      return HAL_SDMMC_ERR_SEM;
++    }
++
++  abs.tv_sec += BES_SDMMC_DMA_WAIT_SEC;
++  ret = nxsem_timedwait_uninterruptible(&g_sdmmc_dma_sem, &abs);
++  if (ret == 0)
++    {
++      return HAL_SDMMC_ERR_NONE;
++    }
++  if (ret == -ETIMEDOUT)
++    {
++      return HAL_SDMMC_DMA_XFER_TIMEOUT;
++    }
++  return HAL_SDMMC_ERR_SEM;
++}
++
++static struct HAL_SDMMC_CB_T g_bes_sdmmc_cb =
++{
++  .hal_sdmmc_signal_voltage_switch = NULL,
++  .hal_sdmmc_host_error = NULL,
++  .hal_sdmmc_txrx_done = NULL, /* HAL true-nonblock path is incomplete */
++  .hal_sdmmc_sem_init = bes_sdmmc_sem_init,
++  .hal_sdmmc_sem_reset = bes_sdmmc_sem_reset,
++  .hal_sdmmc_sem_post = bes_sdmmc_sem_post,
++  .hal_sdmmc_sem_wait = bes_sdmmc_sem_wait,
++};
++
++static void bes_sdmmc_cfg_defaults(FAR struct HAL_SDMMC_CONFIG_T *cfg)
++{
++  memset(cfg, 0, sizeof(*cfg));
++  cfg->yield = true; /* DMA wait via sem_wait — frees CPU1 for lower-prio work */
++  cfg->ddr_mode = false;
++  cfg->volt_switch = false;
++  cfg->device_type = HAL_SDMMC_DEVICE_TYPE_SD;
++  cfg->bus_speed = CONFIG_BES_SDMMC_SPEED;
++#if defined(CONFIG_SDIO_WIDTH_D1_ONLY)
++  cfg->bus_width = HAL_SDMMC_BUS_WIDTH_1;
++#else
++  cfg->bus_width = HAL_SDMMC_BUS_WIDTH_4;
++#endif
++}
++
++static int bes_sdmmc_open_host(void)
++{
++  struct HAL_SDMMC_CONFIG_T cfg;
++
++  bes_sdmmc_cfg_defaults(&cfg);
++  hal_sdmmc_set_delay_us_func((HAL_SDMMC_DELAY_US_FUNC)usleep);
++  return (int)hal_sdmmc_open_ext(HAL_SDMMC_ID_0, &cfg, &g_bes_sdmmc_cb);
++}
++
+ /****************************************************************************
+  * Private Types
+  ****************************************************************************/
+@@ -447,18 +561,7 @@ static int try_sw_reset(int ret)
+     {
+         _err("need reset for last ret:0x%x,total_reset_count:%d\n",ret,total_reset_count);
+         hal_sdmmc_close(HAL_SDMMC_ID_0);
+-        struct HAL_SDMMC_CONFIG_T emmc_cfg = {0};
+-        emmc_cfg.ddr_mode = false;
+-        emmc_cfg.volt_switch = false;
+-        emmc_cfg.device_type = HAL_SDMMC_DEVICE_TYPE_SD;
+-        emmc_cfg.bus_speed = CONFIG_BES_SDMMC_SPEED;
+-#if defined(CONFIG_SDIO_WIDTH_D1_ONLY)
+-        emmc_cfg.bus_width = HAL_SDMMC_BUS_WIDTH_1;
+-#else
+-        emmc_cfg.bus_width = HAL_SDMMC_BUS_WIDTH_4;
+-#endif
+-        hal_sdmmc_set_delay_us_func((HAL_SDMMC_DELAY_US_FUNC)usleep);
+-        ret = hal_sdmmc_open_ext(HAL_SDMMC_ID_0, &emmc_cfg, NULL);
++        ret = bes_sdmmc_open_host();
+         _err("hal_sdmmc_open ret: %d\n", ret);
+         if (ret != 0)
+         {
+@@ -470,7 +573,7 @@ static int try_sw_reset(int ret)
+             usleep(100*1000);
+             IOEXP_WRITEPIN(ioe, GPIO_SD_PWR_PIN, 0);
+ #endif
+-            ret = hal_sdmmc_open_ext(HAL_SDMMC_ID_0, &emmc_cfg, NULL);
++            ret = bes_sdmmc_open_host();
+             _err("hal_sdmmc_open ret: %d after hw reset\n", ret);
+             if (ret != 0)
+             {
+@@ -484,14 +587,120 @@ static int try_sw_reset(int ret)
+ }
+ 
+ #ifdef DMA_BUFFER_SIZE
++static bool mmcsd_dma_direct_ok(FAR unsigned char *buffer, unsigned int nbytes,
++                                unsigned int blocksize)
++{
++  uintptr_t p = (uintptr_t)buffer;
++
++  if (buffer == NULL || nbytes == 0 || blocksize == 0)
++    {
++      return false;
++    }
++  /* 64B DMA alignment + whole sectors only. */
++  if ((p & 63u) != 0 || (nbytes % blocksize) != 0)
++    {
++      return false;
++    }
++  return true;
++}
++
+ static ssize_t mmcsd_bufread(FAR struct mmcsd_state_s *priv, unsigned char *buffer,
+                           blkcnt_t startsector, unsigned int nsectors)
+ {
+     ssize_t ret = nsectors;
++    unsigned int nbytes = nsectors * priv->blocksize;
++    bool direct = mmcsd_dma_direct_ok(buffer, nbytes, priv->blocksize);
++
++    /* Aligned caller buffer: DMA straight in, skip bounce memcpy. */
++    if (direct)
++      {
+ #ifndef DMA_BUFFER_UNCACHE
++        irqstate_t flags = up_irq_save();
++        up_invalidate_dcache((uintptr_t)buffer, (uintptr_t)(buffer + nbytes));
++        up_irq_restore(flags);
++#endif
++        if (nbytes <= DMA_BUFFER_SIZE)
++          {
++            uint8_t retry_count = 0;
++          retry_direct1:
++            ret = hal_sdmmc_read_blocks(HAL_SDMMC_ID_0, startsector, nsectors,
++                                        buffer);
++            finfo("direct startsector: %" PRIuOFF " nsectors: %u ret: %d\n",
++                  startsector, nsectors, (int)ret);
++            if (try_sw_reset(ret) == 1 && retry_count++ < 3)
++              {
++                goto retry_direct1;
++              }
++            if (ret != nsectors)
++              {
++                return ret;
++              }
++#ifndef DMA_BUFFER_UNCACHE
++            flags = up_irq_save();
++            up_invalidate_dcache((uintptr_t)buffer, (uintptr_t)(buffer + nbytes));
++            up_irq_restore(flags);
++#endif
++            return nsectors;
++          }
++        else
++          {
++            uint32_t nsectors_dma = DMA_BUFFER_SIZE / priv->blocksize;
++            uint32_t cnt = nsectors / nsectors_dma;
++            int i;
++            for (i = 0; i < (int)cnt; i++)
++              {
++                uint8_t retry_count = 0;
++                unsigned char *dst =
++                  buffer + (size_t)i * nsectors_dma * priv->blocksize;
++              retry_direct2:
++                ret = hal_sdmmc_read_blocks(HAL_SDMMC_ID_0,
++                                             startsector + i * nsectors_dma,
++                                             nsectors_dma, dst);
++                if (try_sw_reset(ret) == 1 && retry_count++ < 3)
++                  {
++                    goto retry_direct2;
++                  }
++                if (ret != (ssize_t)nsectors_dma)
++                  {
++                    return i;
++                  }
++              }
++            if (nsectors > cnt * nsectors_dma)
++              {
++                uint8_t retry_count = 0;
++                unsigned int rem = nsectors - cnt * nsectors_dma;
++                unsigned char *dst =
++                  buffer + (size_t)cnt * nsectors_dma * priv->blocksize;
++              retry_direct3:
++                ret = hal_sdmmc_read_blocks(HAL_SDMMC_ID_0,
++                                             startsector + cnt * nsectors_dma,
++                                             rem, dst);
++                if (try_sw_reset(ret) == 1 && retry_count++ < 3)
++                  {
++                    goto retry_direct3;
++                  }
++                if (ret != (ssize_t)rem)
++                  {
++                    return 0;
++                  }
++              }
++#ifndef DMA_BUFFER_UNCACHE
++            {
++              irqstate_t flags2 = up_irq_save();
++              up_invalidate_dcache((uintptr_t)buffer, (uintptr_t)(buffer + nbytes));
++              up_irq_restore(flags2);
++            }
++#endif
++            return nsectors;
++          }
++      }
++
++#ifndef DMA_BUFFER_UNCACHE
++    {
+     irqstate_t flags = up_irq_save();
+     up_invalidate_dcache(read_dma_buf, read_dma_buf + DMA_BUFFER_SIZE);
+     up_irq_restore(flags);
++    }
+ #endif
+     if (nsectors*priv->blocksize <= DMA_BUFFER_SIZE)
+     {
+@@ -884,44 +1093,59 @@ static int mmcsd_ioctl(FAR struct inode *inode, int cmd, unsigned long arg)
+  *   handler; it is probably running in the context of work thread.
+  *
+  ****************************************************************************/
+-#if defined(CONFIG_GPT_PARTITION)
++#if defined(CONFIG_GPT_PARTITION) || defined(CONFIG_MBR_PARTITION)
+ 
+ static void bes_partition_handler(FAR struct partition_s *part,
+                                   FAR void *path)
+ {
+     char dev[PATH_MAX];
+     int ret;
+-    snprintf(dev, sizeof(dev), "/dev/%s", part->name);
+-    ret = register_blockpartition(dev, 0, path, part->firstblock, part->nblocks);
+-    if (ret < 0)
++
++    /* GPT partitions have names; MBR partitions do not.  Always expose the
++     * first usable partition through a stable path for rcS.audio.
++     */
++
++    if (part->name[0] != '\0')
+       {
+-        ferr("ERROR: Failed to register block device: %s %d\n", part->name, ret);
++        snprintf(dev, sizeof(dev), "/dev/%s", part->name);
++        ret = register_blockpartition(dev, 0, path,
++                                      part->firstblock, part->nblocks);
++        if (ret < 0)
++          {
++            ferr("ERROR: Failed to register block device: %s %d\n",
++                 part->name, ret);
++          }
++      }
++
++    if (part->index == 0)
++      {
++        ret = register_blockpartition("/dev/sdcard0", 0, path,
++                                      part->firstblock, part->nblocks);
++        if (ret < 0)
++          {
++            ferr("ERROR: Failed to register /dev/sdcard0: %d\n", ret);
++          }
++        else
++          {
++            fwarn("Register stable SD partition:/dev/sdcard0\n");
++          }
+       }
+ 
+     fwarn("Register block device:%s, first:%d, nblocks:%d, blocksize:%d\n",
+-          part->name, part->firstblock, part->nblocks, part->blocksize);
++          part->name[0] ? part->name : "(MBR)",
++          part->firstblock, part->nblocks, part->blocksize);
+ }
+ 
+-#endif /* CONFIG_GPT_PARTITION */
++#endif /* CONFIG_GPT_PARTITION || CONFIG_MBR_PARTITION */
+ 
+ static void do_sd_mount(void *arg)
+ {
+   uint32_t nblocks, block_size;
+   FAR struct mmcsd_state_s *priv = (FAR struct mmcsd_state_s *)arg;
+   /* Initialize the hardware associated with the slot */
+-  struct HAL_SDMMC_CONFIG_T emmc_cfg = {0};
+   struct HAL_SDMMC_CARD_INFO_T card_info = {0};
+-  emmc_cfg.ddr_mode = false;
+-  emmc_cfg.volt_switch = false;
+-  emmc_cfg.bus_speed = CONFIG_BES_SDMMC_SPEED;
+-  emmc_cfg.device_type = HAL_SDMMC_DEVICE_TYPE_SD;
+-#if defined(CONFIG_SDIO_WIDTH_D1_ONLY)
+-  emmc_cfg.bus_width = HAL_SDMMC_BUS_WIDTH_1;
+-#else
+-  emmc_cfg.bus_width = HAL_SDMMC_BUS_WIDTH_4;
+-#endif
+-  hal_sdmmc_set_delay_us_func((HAL_SDMMC_DELAY_US_FUNC)usleep);
+-  int ret = hal_sdmmc_open_ext(HAL_SDMMC_ID_0, &emmc_cfg, NULL);
++  int ret = bes_sdmmc_open_host();
++  fwarn("bes_sdmmc: open with DMA yield=sem\n");
+   if (ret != 0)
+     {
+       ferr("ERROR: hal_sdmmc_open failed: %d\n", ret);
+@@ -984,7 +1208,7 @@ static void do_sd_mount(void *arg)
+     }
+ #endif
+ 
+-#if defined(CONFIG_GPT_PARTITION)
++#if defined(CONFIG_GPT_PARTITION) || defined(CONFIG_MBR_PARTITION)
+   ret = parse_block_partition("/dev/mmcsd0", bes_partition_handler, "/dev/mmcsd0");
+   if (ret < 0)
+   {

@@ -1,0 +1,19 @@
+# a7_dzq — dzq 工程用 A7 配置
+
+- 基于 `a7_wtsynth`（RPMSG pcm0p + wavetable_synth）
+- NSH prompt: `a7dz>`
+- **AP/bl/ota/apc1 固定用 `dzq/bins/` vendor 镜像**
+
+## Build
+
+```bash
+./build.sh boards/best2003_ep/aos_evb_ax4d/configs/a7_dzq -j
+```
+
+## Flash（只换 A7）
+
+```bash
+./dzq/tools/flash.sh --a7 rtos/nuttx/nuttx_a7.bin --hw-reset both
+```
+
+> 自编译 A7 与 vendor A7 行为可能仍有差异，先用 `./dzq/tools/flash.sh` 验证 vendor 链路，再换自编译 A7 调试合成器。

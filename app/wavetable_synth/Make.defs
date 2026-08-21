@@ -1,0 +1,7 @@
+############################################################################
+# apps/wavetable_synth/Make.defs
+############################################################################
+
+ifneq ($(filter y m,$(CONFIG_WAVETABLE_SYNTH) $(CONFIG_USB_MIDI_BRIDGE)),)
+CONFIGURED_APPS += $(APPDIR)/vendor/bes/apps/wavetable_synth
+endif

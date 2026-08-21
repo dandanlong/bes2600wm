@@ -1,0 +1,3 @@
+ifneq ($(CONFIG_DAILE_BTSINK),)
+CONFIGURED_APPS += $(APPDIR)/vendor/bes/apps/daile_btsink
+endif

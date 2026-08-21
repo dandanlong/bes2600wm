@@ -1,0 +1,26 @@
+# build outputs
+/out/
+firmware/
+
+# build artifacts that may sneak in from the SDK app dir
+*.o
+*.a
+*.d
+*.lo
+*.la
+*.so
+.built
+.depend
+Make.dep
+
+# editor / backup
+*.bak
+*.bak_*
+*.orig
+*.rej
+*~
+.DS_Store
+
+# large vendor binaries kept out of source control
+*.deb
+*.bin

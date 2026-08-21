@@ -1,0 +1,181 @@
+diff --git a/platform/hal/best2003/hal_cmu_best2003.c b/platform/hal/best2003/hal_cmu_best2003.c
+index 76b4b4231..843788369 100644
+--- a/platform/hal/best2003/hal_cmu_best2003.c
++++ b/platform/hal/best2003/hal_cmu_best2003.c
+@@ -4070,8 +4070,8 @@ void hal_cmu_dsp_init_boot_reg(uint32_t entry)
+ 
+ void hal_cmu_dsp_start_cpu(void)
+ {
+-    if (g_dsi_pixclk_mhz == 0) // m33 lcdc not enable
+-        hal_cmu_dsp_set_freq(HAL_CMU_FREQ_156M);//div 5
++    /* Keep A7 at PLL max (780M). Old path forced 156M when LCD off. */
++    hal_cmu_dsp_set_freq(HAL_CMU_FREQ_780M);
+     aoncmu->SOFT_RSTN_CLR = AON_CMU_SOFT_RSTN_A7CPU_CLR;
+ }
+ 
+diff --git a/platform/hal/best2003/hal_dmacfg_best2003.h b/platform/hal/best2003/hal_dmacfg_best2003.h
+index bb46de1bb..9f570c3a4 100644
+--- a/platform/hal/best2003/hal_dmacfg_best2003.h
++++ b/platform/hal/best2003/hal_dmacfg_best2003.h
+@@ -77,8 +77,8 @@ static const uint32_t bes2003_audma_fifo_addr[GPDMA_PERIPH_NUM] = {
+     CODEC_BASE + 0x01C,     // CODEC RX
+     CODEC_BASE + 0x01C,     // CODEC TX
+ #ifdef AF_DEVICE_I2S
+-    I2S0_BASE + 0x200,      // I2S1 RX
+-    I2S0_BASE + 0x240,      // I2S1 TX
++    I2S1_BASE + 0x200,      // I2S1 RX (DAILE mirror)
++    I2S1_BASE + 0x240,      // I2S1 TX (DAILE mirror)
+ #else
+     IRDA_BASE + 0x000,      // IR RX
+     IRDA_BASE + 0x004,      // IR TX
+@@ -105,8 +105,8 @@ static const enum HAL_DMA_PERIPH_T bes2003_audma_fifo_periph[GPDMA_PERIPH_NUM] =
+     HAL_AUDMA_CODEC_RX,
+     HAL_AUDMA_CODEC_TX,
+ #ifdef AF_DEVICE_I2S
+-    HAL_AUDMA_I2S0_RX,
+-    HAL_AUDMA_I2S0_TX,
++    HAL_AUDMA_I2S1_RX,
++    HAL_AUDMA_I2S1_TX,
+ #else
+     HAL_GPDMA_IR_RX,
+     HAL_GPDMA_IR_TX,
+diff --git a/rtos/nuttx/nuttx_media_api.c b/rtos/nuttx/nuttx_media_api.c
+index 7863f0373..a0198a450 100644
+--- a/rtos/nuttx/nuttx_media_api.c
++++ b/rtos/nuttx/nuttx_media_api.c
+@@ -37,7 +37,7 @@
+ #include "nuttx_addr_conv.h"
+ 
+ #ifndef CONFIG_AUDIO_BES_FRAME_MS
+-#define CONFIG_AUDIO_BES_FRAME_MS 20
++#define CONFIG_AUDIO_BES_FRAME_MS 10
+ #endif
+ 
+ typedef uint32_t (*nuttx_audio_dma_callback_t)(uint8_t *buf, uint32_t len);
+diff --git a/scripts/link/armca_psram.lds.S b/scripts/link/armca_psram.lds.S
+index be199bc54..f897ff76f 100644
+--- a/scripts/link/armca_psram.lds.S
++++ b/scripts/link/armca_psram.lds.S
+@@ -534,6 +534,44 @@ SECTIONS
+ 		__psram_bss_end__ = .;
+ 	} > PSRAM
+ #endif
++	/* Dedicated 1 MiB effects RAM in the separate 3 MiB PSRAM bank. */
++	.fx_psram_pool (NOLOAD) :
++	{
++		. = ALIGN(64);
++		__fx_pool_start = .;
++		*libapps.a:*xmos_fx_chain*.o(.bss .bss.* COMMON)
++		*libapps.a:*global*.o(.bss .bss.* COMMON)
++		*libapps.a:*VoxAC30*.o(.bss .bss.* COMMON)
++		*libapps.a:*Marshall800*.o(.bss .bss.* COMMON)
++		*libapps.a:*MesaBoogie*.o(.bss .bss.* COMMON)
++		*libapps.a:*FenderTwinReverb*.o(.bss .bss.* COMMON)
++		*libapps.a:*DiezelCH4*.o(.bss .bss.* COMMON)
++		*libapps.a:*Vox212*.o(.bss .bss.* COMMON)
++		*libapps.a:*Mesa412*.o(.bss .bss.* COMMON)
++		*libapps.a:*Marshall212*.o(.bss .bss.* COMMON)
++		*libapps.a:*Marshall412*.o(.bss .bss.* COMMON)
++		*libapps.a:*FenderTwinReverb212*.o(.bss .bss.* COMMON)
++		*libapps.a:*Diezel412*.o(.bss .bss.* COMMON)
++		*libapps.a:*Ts808*.o(.bss .bss.* COMMON)
++		*libapps.a:*MxrDisPlus*.o(.bss .bss.* COMMON)
++		*libapps.a:*Vintage_ProcoRat*.o(.bss .bss.* COMMON)
++		*libapps.a:*CompressorA*.o(.bss .bss.* COMMON)
++		*libapps.a:*chorus*.o(.bss .bss.* COMMON)
++		*libapps.a:*pureDelay*.o(.bss .bss.* COMMON)
++		*libapps.a:*EQT1*.o(.bss .bss.* COMMON)
++		*libapps.a:*reverbT1*.o(.bss .bss.* COMMON)
++		*libapps.a:*Tremolo*.o(.bss .bss.* COMMON)
++		*libapps.a:*autoPan*.o(.bss .bss.* COMMON)
++		*libapps.a:*multiBandCompT0*.o(.bss .bss.* COMMON)
++		. = ALIGN(64);
++		__fx_alloc_start = .;
++		. = __fx_pool_start + 0x100000;
++		. = ALIGN(64);
++		__fx_pool_end = .;
++	} > PSRAM
++	ASSERT(__fx_alloc_start <= __fx_pool_end, "XMOS FX state exceeds 1MiB pool")
++	ASSERT(__fx_pool_end <= ORIGIN(PSRAM) + LENGTH(PSRAM), "FX pool overflows PSRAM")
++
+ #endif
+ 	. = __sram_data_end_load__;
+ 
+diff --git a/services/aiot/a7_dsp/common/mcu_slave_init.c b/services/aiot/a7_dsp/common/mcu_slave_init.c
+index 585fae2e0..6190edd49 100644
+--- a/services/aiot/a7_dsp/common/mcu_slave_init.c
++++ b/services/aiot/a7_dsp/common/mcu_slave_init.c
+@@ -147,7 +147,7 @@ static int __a7_dsp_boot(void)
+     /* init dsp clock */
+     hal_cmu_dsp_clock_enable();
+     hal_cmu_dsp_reset_clear();
+-    hal_sysfreq_req(HAL_SYSFREQ_USER_DSP, HAL_CMU_FREQ_390M);
++    hal_sysfreq_req(HAL_SYSFREQ_USER_DSP, HAL_CMU_FREQ_780M);
+ #if defined(CHECK_A7_BOOT_STATUS)
+     extern void hal_cmu_simu_init(void);
+     hal_cmu_simu_init();
+@@ -351,10 +351,11 @@ static int __a7_dsp_boot(void)
+     hal_sysfreq_req(HAL_SYSFREQ_USER_DSP, HAL_CMU_FREQ_52M);
+     hal_sys_timer_delay(TICKS_TO_MS(10));
+ 
+-    /* start to run dsp */
++    /* start to run dsp @ 780M */
+     hal_cmu_dsp_start_cpu();
++    hal_cmu_dsp_set_freq(HAL_CMU_FREQ_780M);
+     hal_sys_timer_delay(TICKS_TO_MS(100));
+-    hal_sysfreq_req(HAL_SYSFREQ_USER_DSP, HAL_CMU_FREQ_390M);
++    hal_sysfreq_req(HAL_SYSFREQ_USER_DSP, HAL_CMU_FREQ_780M);
+     int_unlock(lock);
+ #if defined(CONFIG_RPTUN) && defined(CHECK_A7_BOOT_STATUS)
+     uint8_t check_count = 0;
+diff --git a/services/aiot/a7_dsp/os/nuttx/a7_dsp_os.c b/services/aiot/a7_dsp/os/nuttx/a7_dsp_os.c
+index 113139ce6..d707cb2dd 100644
+--- a/services/aiot/a7_dsp/os/nuttx/a7_dsp_os.c
++++ b/services/aiot/a7_dsp/os/nuttx/a7_dsp_os.c
+@@ -60,6 +60,8 @@ void a7_setup_early(void)
+     hal_cmu_dsp_setup();
+     hal_sys_timer_open();
+     hal_sysfreq_req(HAL_SYSFREQ_USER_INIT, HAL_CMU_FREQ_780M);
++    /* SUBSYS_RMT_SYSFREQ_REQ only RPMSG-notifies AP; set local CMU too. */
++    hal_cmu_dsp_set_freq(HAL_CMU_FREQ_780M);
+ }
+ 
+ void bes_cmsis_wrapper(void)
+diff --git a/services/audio_process/audio_process_eq.c b/services/audio_process/audio_process_eq.c
+index 7543dbd1a..2ccf1a5e0 100644
+--- a/services/audio_process/audio_process_eq.c
++++ b/services/audio_process/audio_process_eq.c
+@@ -21,6 +21,8 @@
+ #include "hw_codec_iir_process.h"
+ #include "hw_iir_process.h"
+ #include "hal_codec.h"
++#include "heap_api.h"
++#include <stdlib.h>
+ 
+ // Enable this to test AUDIO_CUSTOM_EQ with audiotools,
+ // eq config from audiotools will be merge with default eq config.
+@@ -747,7 +749,23 @@ int audio_process_eq_open(enum AUD_SAMPRATE_T sample_rate, enum AUD_BITS_T sampl
+ #endif
+ 
+ #ifdef __SW_IIR_EQ_PROCESS__
+-    iir_open(sample_rate, sample_bits,sw_ch_num);
++    {
++        int32_t iir_frame = frame_size > 0 ? frame_size : 160;
++        uint32_t sw_iir_overlap_size =
++          sw_ch_num * (sample_bits <= AUD_BITS_16 ? 2 : 4) * iir_frame;
++        uint8_t *sw_iir_overlap = NULL;
++
++        syspool_get_buff(&sw_iir_overlap, sw_iir_overlap_size);
++        if (sw_iir_overlap == NULL)
++          {
++            sw_iir_overlap = (uint8_t *)malloc(sw_iir_overlap_size);
++          }
++        if (sw_iir_overlap != NULL)
++          {
++            iir_set_buf(sw_iir_overlap, sw_iir_overlap_size);
++          }
++      }
++    iir_open(sample_rate, sample_bits, sw_ch_num);
+ #ifdef AUDIO_EQ_SW_IIR_UPDATE_CFG
+     audio_eq_set_cfg(NULL, &audio_eq.sw_iir_cfg, AUDIO_EQ_TYPE_SW_IIR);
+ #endif
